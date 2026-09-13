@@ -24,6 +24,14 @@ namespace SRMultiplayer.Server
         public AutoHostConfig Config { get; private set; }
         public bool IsHosting { get; private set; }
 
+        /// <summary>
+        /// True once the host character has been tucked away. Gates the
+        /// invulnerability patch so a normal client host is never affected.
+        /// </summary>
+        public bool IsParked { get; private set; }
+
+        private Vector3 m_ParkPosition;
+
         private float m_LastStatus;
         private float m_LastSave;
         private float m_LastShutdownCheck;
@@ -50,7 +58,9 @@ namespace SRMultiplayer.Server
             ServerLog("=====================================");
             ServerLog(" SRMP headless host starting");
             ServerLog(" username : " + Config.Username);
-            ServerLog(" save     : " + (string.IsNullOrEmpty(Config.GameName) ? "<new game>" : Config.GameName));
+            ServerLog(" save     : " + (string.IsNullOrEmpty(Config.GameName)
+                ? (Config.LoadLatestSave ? "<most recent>" : "<new game>")
+                : Config.GameName));
             ServerLog(" slots    : " + Globals.MaxPlayers);
             ServerLog(" config   : " + AutoHostConfig.ConfigPath);
             ServerLog("=====================================");
@@ -112,6 +122,7 @@ namespace SRMultiplayer.Server
             }
 
             IsHosting = true;
+            ParkHostPlayer();
             PublishServerCode();
         }
 
@@ -171,6 +182,22 @@ namespace SRMultiplayer.Server
                 ServerLog($"[AutoHost] Save '{Config.GameName}' not found, creating a new game instead");
             }
 
+            //no specific world asked for: continue where the server left off,
+            //otherwise every restart silently abandons the previous world
+            if (Config.LoadLatestSave)
+            {
+                var latest = FindLatestSave(autoSave);
+                if (latest != null)
+                {
+                    ServerLog($"[AutoHost] Continuing most recent save '{latest.displayName}' "
+                              + $"(day {latest.day}, saved {latest.saveTimestamp:yyyy-MM-dd HH:mm})");
+                    autoSave.BeginLoad(latest.name, latest.saveName,
+                        () => ServerLog("[AutoHost] Save failed to load"));
+                    return true;
+                }
+                ServerLog("[AutoHost] No existing save found, creating the first world");
+            }
+
             var mode = Config.ResolveGameMode();
             ServerLog($"[AutoHost] Creating new game '{Config.NewGameDisplayName}' ({mode})");
             autoSave.LoadNewGame(Config.NewGameDisplayName, Identifiable.Id.PINK_SLIME, mode,
@@ -213,6 +240,54 @@ namespace SRMultiplayer.Server
             return null;
         }
 
+        /// <summary>
+        /// The newest valid save across every world. The game's own
+        /// GetSaveToContinue is preferred so the server picks the same world the
+        /// Continue button would; scanning is only a fallback for when that is
+        /// unavailable.
+        /// </summary>
+        private GameData.Summary FindLatestSave(AutoSaveDirector autoSave)
+        {
+            try
+            {
+                var continueSave = autoSave.GetSaveToContinue();
+                if (continueSave != null && !continueSave.isInvalid)
+                {
+                    return continueSave;
+                }
+            }
+            catch (Exception ex)
+            {
+                ServerLog("[AutoHost] GetSaveToContinue failed, scanning instead\n" + ex);
+            }
+
+            try
+            {
+                var games = autoSave.AvailableGamesByGameName();
+                if (games == null) return null;
+
+                GameData.Summary newest = null;
+                foreach (var entry in games)
+                {
+                    if (entry.Value == null) continue;
+                    foreach (var save in entry.Value)
+                    {
+                        if (save == null || save.isInvalid) continue;
+                        if (newest == null || save.saveTimestamp > newest.saveTimestamp)
+                        {
+                            newest = save;
+                        }
+                    }
+                }
+                return newest;
+            }
+            catch (Exception ex)
+            {
+                ServerLog("[AutoHost] Could not scan saves\n" + ex);
+                return null;
+            }
+        }
+
         /// <summary>Waits for the game scene to report itself fully loaded.</summary>
         private IEnumerator WaitForWorld(Action<bool> result)
         {
@@ -227,6 +302,72 @@ namespace SRMultiplayer.Server
                 yield return null;
             }
             result(false);
+        }
+
+        /// <summary>
+        /// Drops the host character straight down, out of sight. Straight down
+        /// rather than far away on purpose: the host keeps the same horizontal
+        /// position, so it stays inside the same streaming region and carries on
+        /// loading and arbitrating the ranch.
+        /// </summary>
+        private void ParkHostPlayer()
+        {
+            if (!Config.HidePlayer) return;
+
+            try
+            {
+                var player = SRSingleton<SceneContext>.Instance.Player;
+                if (player == null)
+                {
+                    ServerLog("[AutoHost] No player to park");
+                    return;
+                }
+
+                m_ParkPosition = player.transform.position + Vector3.down * Mathf.Abs(Config.ParkDepth);
+                player.transform.position = m_ParkPosition;
+                IsParked = true;
+
+                ServerLog($"[AutoHost] Host character parked {Config.ParkDepth}m below the surface "
+                          + "and made invulnerable");
+            }
+            catch (Exception ex)
+            {
+                ServerLog("[AutoHost] Could not park the host character\n" + ex);
+            }
+        }
+
+        /// <summary>
+        /// Holds the host in place. Without this it falls, drifts or gets pushed,
+        /// and the server player wanders off into the world it is supposed to be
+        /// hidden from.
+        /// </summary>
+        private void HoldHostParked()
+        {
+            if (!IsParked) return;
+
+            try
+            {
+                var player = SRSingleton<SceneContext>.Instance.Player;
+                if (player == null) return;
+
+                if (player.transform.position != m_ParkPosition)
+                {
+                    player.transform.position = m_ParkPosition;
+                }
+
+                //nothing should be able to kill it, but a world that finds a way
+                //would take the whole server down with it
+                var state = SRSingleton<SceneContext>.Instance.PlayerState;
+                if (state != null)
+                {
+                    if (state.GetCurrHealth() < state.GetMaxHealth()) state.SetHealth(state.GetMaxHealth());
+                    if (state.GetCurrEnergy() < state.GetMaxEnergy()) state.SetEnergy(state.GetMaxEnergy());
+                }
+            }
+            catch
+            {
+                //a transient null during a scene change is not worth logging every frame
+            }
         }
 
         /// <summary>Writes the friend code to stdout, the log and a file operators can read.</summary>
@@ -301,6 +442,21 @@ namespace SRMultiplayer.Server
             }
             catch { /* the container is going away anyway */ }
 
+            //close the lobby before quitting: members get a membership-closed
+            //event and return to the menu, instead of waiting out a timeout in a
+            //world that is no longer being hosted
+            try
+            {
+                EpicApplication.Instance.Lobby.DestroyLobby();
+            }
+            catch (Exception ex)
+            {
+                ServerLog("[AutoHost] Could not close the lobby cleanly\n" + ex);
+            }
+
+            //give the close a moment to reach everyone before the process dies
+            yield return new WaitForSeconds(2f);
+
             ServerLog("[AutoHost] Closing lobby and quitting");
 
             //SRMP.OnDestroy and EpicApplication.OnApplicationQuit tear the lobby
@@ -311,6 +467,8 @@ namespace SRMultiplayer.Server
         private void Update()
         {
             if (!IsHosting) return;
+
+            HoldHostParked();
 
             //poll rather than use a FileSystemWatcher: this has to work across a
             //bind mount, where watcher events are not reliably delivered

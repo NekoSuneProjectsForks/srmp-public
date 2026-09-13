@@ -87,6 +87,7 @@ ENV LIBGL_ALWAYS_SOFTWARE=1 \
     WINEDEBUG="fixme-all" \
     GAME_DIR=/game \
     MODS_DIR=/mods \
+    SAVES_DIR=/saves \
     STEAM_APPID=433340 \
     DISPLAY_NUM=99
 
@@ -96,7 +97,7 @@ COPY entrypoint.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/entrypoint.sh \
  && ln -s /usr/local/bin/entrypoint.sh /usr/local/bin/srmp
 
-VOLUME ["/game", "/wine", "/steam"]
+VOLUME ["/game", "/wine", "/steam", "/saves"]
 
 LABEL org.opencontainers.image.title="SRMP headless server runtime" \
       org.opencontainers.image.description="Wine + Xvfb runtime for hosting Slime Rancher Multiplayer headless. Contains no game content." \

@@ -126,6 +126,7 @@ No scripts to download — the image dispatches on its first argument:
 | `login` | One-time interactive Steam login. Needs `-it`. |
 | `code` | Prints the current friend code. |
 | `stop` | Asks a running server to save and quit. |
+| `saves` | Lists the worlds this server has saved. |
 | `diagnose` | Dumps Wine/SRML state and runs the installer verbosely. |
 | `shell` | A shell inside the runtime, for poking around. |
 | `help` | Usage, with copy-pasteable examples. |
@@ -242,6 +243,9 @@ missing.
 | `SRMP_NEW_GAME_NAME` | Display name used when creating a new world. |
 | `SRMP_GAMEMODE` | `CLASSIC`, `CASUAL`, `TIME_LIMIT` or `TIME_LIMIT_V2`. |
 | `SRMP_SLOTS` | Lobby capacity including the host (2-64). Default 16. |
+| `SRMP_LOAD_LATEST` | With `SRMP_GAME` blank, continue the newest world instead of creating one. Default true. |
+| `SRMP_HIDE_PLAYER` | Park the host character underground and make it invulnerable. Default true. |
+| `SRMP_PARK_DEPTH` | How far below its start point the host is parked, in metres. Default 40. |
 | `SRMP_STATUS_INTERVAL` | Seconds between "N players online" lines. `0` disables. |
 | `SRMP_AUTOSAVE_INTERVAL` | Seconds between forced saves. `0` disables. |
 | `SRML_URL` | Where to fetch `SRMLInstaller.exe`. Override if the default 404s. |

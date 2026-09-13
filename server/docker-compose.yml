@@ -16,6 +16,9 @@ services:
       - ./mods:/mods
       # Steam login cache — keeps you from re-entering Steam Guard every boot.
       - ./steam:/steam
+      # Your worlds. Kept out of the wine volume on purpose: the prefix is
+      # disposable and rebuilding it must never cost you a save.
+      - ./saves:/saves
       - wineprefix:/wine
     environment:
       # --- Steam -------------------------------------------------------------
@@ -36,8 +39,11 @@ services:
 
       # --- Server ------------------------------------------------------------
       SRMP_USERNAME: "Server"
-      # Existing save to host. Leave empty to create a fresh world on first boot.
+      # Blank plus SRMP_LOAD_LATEST=true continues the most recently saved world,
+      # so a restart never abandons your progress. Set SRMP_GAME to a world name
+      # to pin one instead — `docker exec srmp-server srmp saves` lists them.
       SRMP_GAME: ""
+      SRMP_LOAD_LATEST: "true"
       SRMP_NEW_GAME_NAME: "SRMP Server"
       # CLASSIC, CASUAL, TIME_LIMIT or TIME_LIMIT_V2
       SRMP_GAMEMODE: "CLASSIC"
@@ -45,6 +51,11 @@ services:
       # player is more packet traffic and more actor ownership for one machine
       # to arbitrate. See "Sizing the server" in the README.
       SRMP_SLOTS: "16"
+      # Hide the host character. A server still needs a player in the world to be
+      # the host, so it is parked underground and made invulnerable rather than
+      # left standing on the ranch. Only affects auto-hosting.
+      SRMP_HIDE_PLAYER: "true"
+      SRMP_PARK_DEPTH: "40"
       SRMP_STATUS_INTERVAL: "60"
       SRMP_AUTOSAVE_INTERVAL: "300"
       # How long to let the game save and quit before it is forced down.

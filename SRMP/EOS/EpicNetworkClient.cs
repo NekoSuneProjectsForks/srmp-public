@@ -228,6 +228,16 @@ namespace SRMultiplayer.Networking
             Status = NetworkClientStatus.Disconnected;
             serverUserId = null;
             incompletePackets.Clear();
+
+            //the lobby closing routes here rather than through OnDisconnected,
+            //so without this the player is left standing in a world that is no
+            //longer synchronised with anything
+            if (SceneManager.GetActiveScene().buildIndex == 3)
+            {
+                Globals.GameLoaded = false;
+                Globals.ClientLoaded = false;
+                SceneManager.LoadScene(2);
+            }
         }
 
         private void SendAuthentication()
@@ -283,6 +293,8 @@ namespace SRMultiplayer.Networking
 
             if (SceneManager.GetActiveScene().buildIndex == 3)
             {
+                Globals.GameLoaded = false;
+                Globals.ClientLoaded = false;
                 SceneManager.LoadScene(2);
             }
         }

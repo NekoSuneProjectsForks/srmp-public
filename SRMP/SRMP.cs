@@ -41,11 +41,59 @@ namespace SRMultiplayer
         public static int SmoothedPing { get; private set; }
 
         /// <summary>
+        /// When the server was last heard from. Used to notice a host that went
+        /// away without EOS ever reporting a clean disconnect.
+        /// </summary>
+        public static float LastServerContact { get; private set; }
+
+        /// <summary>
+        /// Seconds of silence from the server before a client gives up. Several
+        /// times the ping interval so ordinary packet loss never trips it.
+        /// </summary>
+        private const float ServerTimeoutSeconds = 20f;
+
+        /// <summary>Marks the server as alive right now.</summary>
+        public static void NoteServerContact()
+        {
+            LastServerContact = Time.realtimeSinceStartup;
+        }
+
+        /// <summary>
+        /// Tears the connection down and puts the player back on the main menu.
+        /// Staying loaded into a world whose host is gone looks like the game is
+        /// still running when nothing is being synchronised any more.
+        /// </summary>
+        public static void ReturnToMainMenu(string reason)
+        {
+            Log($"[SRMP] Leaving the session: {reason}");
+
+            try
+            {
+                NetworkClient.Instance?.Shutdown();
+            }
+            catch (Exception ex)
+            {
+                Log($"[SRMP] Error while shutting the client down\n{ex}");
+            }
+
+            Globals.GameLoaded = false;
+            Globals.ClientLoaded = false;
+
+            //scene 2 is the main menu; scene 3 is the loaded world
+            if (SceneManager.GetActiveScene().buildIndex == 3)
+            {
+                SceneManager.LoadScene(2);
+            }
+        }
+
+        /// <summary>
         /// Folds one RTT sample into the smoothed value and publishes it on the
         /// local player so the lobby list and the server both see the same number.
         /// </summary>
         public static void RecordPingSample(float rttSeconds)
         {
+            NoteServerContact();
+
             int sample = Mathf.RoundToInt(rttSeconds * 1000f);
             sample = Mathf.Clamp(sample, 0, ushort.MaxValue);
 
@@ -136,6 +184,15 @@ namespace SRMultiplayer
             {
                 if (Globals.IsClient)
                 {
+                    //a host that was killed outright may never produce an EOS
+                    //disconnect, so silence is treated as a lost session
+                    if (LastServerContact > 0f
+                        && Time.realtimeSinceStartup - LastServerContact > ServerTimeoutSeconds)
+                    {
+                        ReturnToMainMenu("the server stopped responding");
+                        return;
+                    }
+
                     //measure the round trip on a steady cadence; the reply also
                     //carries the world clock, so this doubles as the fast time sync
                     if (Time.realtimeSinceStartup - m_LastPing > PingInterval)

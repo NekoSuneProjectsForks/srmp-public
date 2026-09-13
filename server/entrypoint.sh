@@ -6,6 +6,7 @@
 #   login             one-time interactive Steam login (answers Steam Guard)
 #   code              print the current friend code and exit
 #   stop              ask a running server to save and quit
+#   saves             list the worlds this server has saved
 #   diagnose          dump wine/SRML state and run the installer verbosely
 #   shell             drop into a shell inside the runtime
 set -euo pipefail
@@ -24,6 +25,10 @@ SRMP_USERNAME="${SRMP_USERNAME:-Server}"
 SRMP_GAME="${SRMP_GAME:-}"
 SRMP_GAMEMODE="${SRMP_GAMEMODE:-CLASSIC}"
 SRMP_SLOTS="${SRMP_SLOTS:-16}"
+SRMP_LOAD_LATEST="${SRMP_LOAD_LATEST:-true}"
+SAVES_DIR="${SAVES_DIR:-/saves}"
+SRMP_HIDE_PLAYER="${SRMP_HIDE_PLAYER:-true}"
+SRMP_PARK_DEPTH="${SRMP_PARK_DEPTH:-40}"
 
 export WINEPREFIX="${WINEPREFIX:-/wine}"
 export DISPLAY=":${DISPLAY_NUM}"
@@ -47,6 +52,7 @@ Commands:
   login    one-time interactive Steam login, needed once per Steam account
   code     print the current friend code and exit
   stop     ask a running server to save and quit
+  saves    list the worlds this server has saved
   diagnose dump wine/SRML state and run the installer verbosely
   shell    drop into a shell inside the runtime
 
@@ -198,6 +204,72 @@ run_stop() {
   log "shutdown requested; the server will save and quit shortly"
 }
 
+# ------------------------------------------------------------------ saves ---
+# Saves are named <timestamp>_<world>_<n>.sav. The game writes them into the
+# Wine prefix, which lives in a volume that is reasonable to throw away and
+# rebuild -- so the folder is relocated onto its own mount and only symlinked
+# into the prefix. Otherwise resetting the prefix destroys every world.
+link_saves() {
+  local parent="${WINEPREFIX}/drive_c/users/root/AppData/LocalLow/Monomi Park"
+  local target="${parent}/Slime Rancher"
+
+  mkdir -p "${SAVES_DIR}" "${parent}"
+
+  if [[ -L "${target}" ]]; then
+    return 0
+  fi
+
+  if [[ -d "${target}" ]]; then
+    # a prefix from before this change: move the worlds out before linking
+    log "moving existing saves out of the wine prefix into ${SAVES_DIR}"
+    cp -an "${target}/." "${SAVES_DIR}/" 2>/dev/null || true
+    rm -rf "${target}"
+  fi
+
+  ln -s "${SAVES_DIR}" "${target}"
+  log "saves are stored in ${SAVES_DIR} (outside the wine prefix)"
+}
+
+saves_dir() {
+  if [[ -d "${SAVES_DIR}" ]]; then
+    echo "${SAVES_DIR}"
+    return 0
+  fi
+  find "${WINEPREFIX}/drive_c/users" -type d -path '*Monomi Park/Slime Rancher' 2>/dev/null | head -n1
+}
+
+run_saves() {
+  local dir
+  dir="$(saves_dir)"
+
+  if [[ -z "${dir}" ]]; then
+    die "no Slime Rancher data folder in the wine prefix yet — has the game run once?"
+  fi
+
+  echo "save folder: ${dir}"
+  echo ""
+
+  if ! ls "${dir}"/*.sav >/dev/null 2>&1; then
+    echo "no saves yet"
+    return 0
+  fi
+
+  echo "worlds (newest first):"
+  # shellcheck disable=SC2012
+  ls -1t "${dir}"/*.sav | while read -r f; do
+    local base world
+    base="$(basename "${f}" .sav)"
+    # <timestamp>_<world>_<index>: strip the leading stamp and trailing index
+    world="$(echo "${base}" | sed -E 's/^[0-9]+_//; s/_[0-9]+$//')"
+    printf '  %-28s %s  (%s)
+' "${world}" "$(date -r "${f}" '+%Y-%m-%d %H:%M')" "${base}"
+  done
+
+  echo ""
+  echo "The server continues the newest of these automatically."
+  echo "To pin one, set SRMP_GAME to its world name and restart."
+}
+
 # --------------------------------------------------------------- diagnose ---
 # Everything needed to work out why the SRML patch is not taking, without
 # sitting through a restart loop.
@@ -208,6 +280,7 @@ run_diagnose() {
   # the state the server will actually run with.
   start_xvfb
   init_wine
+  link_saves
 
   echo "== wine =="
   wine --version || true
@@ -403,6 +476,9 @@ write_config() {
   "NewGameDisplayName": "${SRMP_NEW_GAME_NAME:-SRMP Server}",
   "GameMode": "${SRMP_GAMEMODE}",
   "CreateGameIfMissing": true,
+  "LoadLatestSave": ${SRMP_LOAD_LATEST},
+  "HidePlayer": ${SRMP_HIDE_PLAYER},
+  "ParkDepth": ${SRMP_PARK_DEPTH},
   "MaxPlayers": ${SRMP_SLOTS},
   "StartupDelaySeconds": 5.0,
   "LoginTimeoutSeconds": 90.0,
@@ -462,6 +538,7 @@ shutdown() {
 run_server() {
   start_xvfb
   init_wine
+  link_saves
   fetch_game
   install_srml
   install_srmp
@@ -599,6 +676,7 @@ case "${COMMAND}" in
   login)          run_login ;;
   code)           run_code ;;
   stop)           run_stop ;;
+  saves)          run_saves ;;
   diagnose)       run_diagnose ;;
   shell|bash)     exec bash "$@" ;;
   help|--help|-h) usage ;;

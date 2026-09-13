@@ -1561,6 +1561,7 @@
       <DesignTime>True</DesignTime>
       <DependentUpon>AssemblyInfo.tt</DependentUpon>
     </Compile>
+    <Compile Include="Patches\PlayerInvulnerablePatch.cs" />
     <Compile Include="Server\AutoHost.cs" />
     <Compile Include="Server\AutoHostConfig.cs" />
     <Compile Include="SRMP.cs" />

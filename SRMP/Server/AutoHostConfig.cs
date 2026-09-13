@@ -23,6 +23,14 @@ namespace SRMultiplayer.Server
         /// </summary>
         public string GameName = "";
 
+        /// <summary>
+        /// When <see cref="GameName"/> is blank, continue the most recently saved
+        /// world instead of creating a fresh one. Without this a headless server
+        /// starts a brand new world on every boot and the previous one is only
+        /// reachable by naming it explicitly.
+        /// </summary>
+        public bool LoadLatestSave = true;
+
         /// <summary>Display name used when a new game has to be created.</summary>
         public string NewGameDisplayName = "SRMP Server";
 
@@ -38,6 +46,21 @@ namespace SRMultiplayer.Server
         /// host CPU and bandwidth, not just a number.
         /// </summary>
         public int MaxPlayers = 16;
+
+        /// <summary>
+        /// Park the host character out of sight once the lobby is open. An
+        /// unattended server still needs a player in the world to be the host,
+        /// but nobody wants to see it standing on the ranch forever. Only applies
+        /// to auto-hosting; someone hosting from their own client is unaffected.
+        /// </summary>
+        public bool HidePlayer = true;
+
+        /// <summary>
+        /// How far below its starting point the host is parked, in metres. Kept
+        /// directly underneath so it stays inside the same streaming region and
+        /// the host does not stop loading the ranch.
+        /// </summary>
+        public float ParkDepth = 40f;
 
         /// <summary>Seconds to wait at the main menu before touching anything.</summary>
         public float StartupDelaySeconds = 3f;
