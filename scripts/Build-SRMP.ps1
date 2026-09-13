@@ -13,6 +13,7 @@ $ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $projectDir = Join-Path $repoRoot 'SRMP'
+$projectPath = Join-Path $projectDir 'SRMP.csproj'
 $solutionPath = Join-Path $repoRoot 'SRMP.sln'
 $outputDll = Join-Path $repoRoot 'Builds\SRMP\SRMP.dll'
 
@@ -146,7 +147,6 @@ $requiredReferences = @(
     'DOTween.dll',
     'InControl.dll',
     'Unity.TextMeshPro.dll',
-    'UnityCoreMod.dll',
     'UnityEngine.dll',
     'UnityEngine.AnimationModule.dll',
     'UnityEngine.AssetBundleModule.dll',
@@ -163,6 +163,9 @@ $requiredReferences = @(
 )
 
 $createdReferences = New-Object System.Collections.Generic.List[string]
+$originalProjectText = $null
+$projectTemporarilyPatched = $false
+
 try {
     Write-Host "Using Slime Rancher: $resolvedGame"
     Write-Host "Using SRML libraries: $srmlLibDir"
@@ -191,6 +194,21 @@ try {
         Copy-Item -LiteralPath $source -Destination $destination -Force
         $createdReferences.Add($destination)
         Write-Host "Staged reference: $name"
+    }
+
+    if ($Configuration -like 'SRML*') {
+        $originalProjectText = Get-Content -LiteralPath $projectPath -Raw
+        $patchedProjectText = [regex]::Replace(
+            $originalProjectText,
+            '(?ms)^\s*<Reference Include="UnityCoreMod[^"]*">.*?</Reference>\s*',
+            ''
+        )
+
+        if ($patchedProjectText -ne $originalProjectText) {
+            [IO.File]::WriteAllText($projectPath, $patchedProjectText, (New-Object Text.UTF8Encoding($true)))
+            $projectTemporarilyPatched = $true
+            Write-Host 'Removed obsolete UnityCoreMod references for this SRML build.' -ForegroundColor DarkYellow
+        }
     }
 
     if (-not (Get-Command t4 -ErrorAction SilentlyContinue)) {
@@ -246,6 +264,10 @@ try {
     }
 }
 finally {
+    if ($projectTemporarilyPatched -and $null -ne $originalProjectText) {
+        [IO.File]::WriteAllText($projectPath, $originalProjectText, (New-Object Text.UTF8Encoding($true)))
+    }
+
     foreach ($path in $createdReferences) {
         Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
     }
