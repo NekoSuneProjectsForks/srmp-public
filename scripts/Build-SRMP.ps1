@@ -211,20 +211,10 @@ try {
         }
     }
 
-    if (-not (Get-Command t4 -ErrorAction SilentlyContinue)) {
-        if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
-            throw 'dotnet is required to install dotnet-t4. Install the .NET 8 SDK.'
-        }
-        Write-Host 'dotnet-t4 is not installed; installing the global tool...'
-        & dotnet tool install --global dotnet-t4
-        if ($LASTEXITCODE -ne 0) { throw "dotnet-t4 installation failed with exit code $LASTEXITCODE" }
-        $env:PATH = "$env:USERPROFILE\.dotnet\tools;$env:PATH"
-    }
-
     $msbuild = Find-MSBuild
     Write-Host "Using MSBuild: $msbuild"
 
-    & $msbuild $solutionPath '/m' '/restore' "/p:Configuration=$Configuration" '/p:Platform=Any CPU' '/verbosity:minimal'
+    & $msbuild $solutionPath '/m' "/p:Configuration=$Configuration" '/p:Platform=Any CPU' '/verbosity:minimal'
     if ($LASTEXITCODE -ne 0) { throw "MSBuild failed with exit code $LASTEXITCODE" }
 
     if (-not (Test-Path -LiteralPath $outputDll -PathType Leaf)) {
