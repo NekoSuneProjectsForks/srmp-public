@@ -122,18 +122,60 @@ jobs:
             type=sha,format=short
             type=raw,value=latest,enable={{is_default_branch}}
 
-      - name: Build and push
+      - name: Build image locally
         uses: docker/build-push-action@v6
         with:
           context: ./server
           file: ./server/Dockerfile
           # Wine and SteamCMD are x86 only; arm64 runners cannot host this.
           platforms: linux/amd64
-          push: ${{ github.event_name != 'pull_request' }}
+          load: true
+          push: false
+          tags: srmp-server:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test the image
+        run: |
+          set -euo pipefail
+
+          echo '--- entrypoint dispatch ---'
+          docker run --rm srmp-server:ci help | head -5
+
+          echo '--- srmp command is on PATH for docker exec ---'
+          docker run --rm --entrypoint sh srmp-server:ci -c 'command -v srmp'
+
+          echo '--- steamcmd resolves its own libraries ---'
+          # steamcmd.sh locates linux32/steamcmd relative to $0, so a bad wrapper
+          # or symlink only fails at runtime. Catch that here instead.
+          docker run --rm --entrypoint sh srmp-server:ci -c '
+            set -e
+            test -x /opt/steamcmd/linux32/steamcmd
+            steamcmd +quit >/tmp/out 2>&1 || true
+            if grep -q "No such file or directory" /tmp/out; then
+              echo "steamcmd cannot find its own binaries:" >&2
+              cat /tmp/out >&2
+              exit 1
+            fi
+            echo "steamcmd ok"
+          '
+
+          echo '--- wine is usable ---'
+          docker run --rm --entrypoint sh srmp-server:ci -c 'wine --version'
+
+          echo 'Smoke test passed.'
+
+      - name: Push image
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: ./server
+          file: ./server/Dockerfile
+          platforms: linux/amd64
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
 
       - name: Summary
         if: github.event_name != 'pull_request'

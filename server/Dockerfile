@@ -30,7 +30,15 @@ RUN dpkg --add-architecture i386 \
 RUN mkdir -p /opt/steamcmd \
  && curl -sSL https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz \
     | tar -xz -C /opt/steamcmd \
- && ln -s /opt/steamcmd/steamcmd.sh /usr/local/bin/steamcmd
+ # steamcmd.sh resolves linux32/steamcmd relative to its own $0, so a symlink
+ # into /usr/local/bin sends it looking in the wrong directory. Wrap it instead.
+ && printf '#!/bin/sh\ncd /opt/steamcmd || exit 1\nexec ./steamcmd.sh "$@"\n' > /usr/local/bin/steamcmd \
+ && chmod +x /usr/local/bin/steamcmd \
+ # Bootstrap it once so the first real run is quick, then assert the layout the
+ # wrapper depends on. steamcmd's own exit code is unreliable on a first run, so
+ # the file check is the actual gate.
+ && ( /usr/local/bin/steamcmd +quit >/dev/null 2>&1 || true ) \
+ && test -x /opt/steamcmd/linux32/steamcmd
 
 # Pre-build a Wine prefix template so the operator's first boot does not pay for
 # it. /wine is a volume at runtime, so this is staged elsewhere and copied in.
