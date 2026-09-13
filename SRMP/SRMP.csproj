@@ -1558,6 +1558,8 @@
       <DesignTime>True</DesignTime>
       <DependentUpon>AssemblyInfo.tt</DependentUpon>
     </Compile>
+    <Compile Include="Server\AutoHost.cs" />
+    <Compile Include="Server\AutoHostConfig.cs" />
     <Compile Include="SRMP.cs" />
     <Compile Include="Console\SRMPConsole.cs" />
     <Compile Include="Utils\Compression.cs" />

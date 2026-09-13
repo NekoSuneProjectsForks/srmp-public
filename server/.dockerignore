@@ -1,0 +1,9 @@
+# The image is runtime-only. Operator data must never enter the build context.
+game/
+mods/
+steam/
+wine/
+*.dll
+*.exe
+README.md
+docker-compose.yml

@@ -1,0 +1,48 @@
+services:
+  srmp:
+    # Prebuilt runtime image from CI. Contains Wine/Xvfb/SteamCMD only — the
+    # game, SRML and the mod are installed on first start, on your machine.
+    # Adjust the path if your fork lives elsewhere.
+    image: ghcr.io/nekosunevr/srmp-public-server:latest
+    # To build it yourself instead, comment out `image:` above and use:
+    # build: .
+    container_name: srmp-server
+    volumes:
+      # Game install. Left empty, steamcmd fills it on first boot.
+      - ./game:/game
+      # Put your built SRMP.dll here (and optionally SRMLInstaller.exe).
+      - ./mods:/mods
+      # Steam login cache — keeps you from re-entering Steam Guard every boot.
+      - ./steam:/steam
+      - wineprefix:/wine
+    environment:
+      # --- Steam -------------------------------------------------------------
+      # Run the one-time login first:
+      #   docker compose run --rm --entrypoint steam-login.sh srmp
+      STEAM_USER: ""
+      STEAM_APPID: "433340"
+      # auto = download only if the game is missing. always = update every boot.
+      STEAM_UPDATE: "auto"
+
+      # --- Rendering ---------------------------------------------------------
+      # No GPU on a VPS. "software" renders via llvmpipe on a virtual display.
+      # "nographics" skips rendering entirely — much cheaper, but not every
+      # Unity build tolerates it. Try software first, then nographics.
+      RENDER_MODE: "software"
+
+      # --- Server ------------------------------------------------------------
+      SRMP_USERNAME: "Server"
+      # Existing save to host. Leave empty to create a fresh world on first boot.
+      SRMP_GAME: ""
+      SRMP_NEW_GAME_NAME: "SRMP Server"
+      # CLASSIC, CASUAL, TIME_LIMIT or TIME_LIMIT_V2
+      SRMP_GAMEMODE: "CLASSIC"
+      SRMP_STATUS_INTERVAL: "60"
+      SRMP_AUTOSAVE_INTERVAL: "300"
+    restart: unless-stopped
+    # Wine plus a Unity scene needs headroom; software rendering is CPU-bound.
+    shm_size: "1gb"
+    stop_grace_period: 60s
+
+volumes:
+  wineprefix:

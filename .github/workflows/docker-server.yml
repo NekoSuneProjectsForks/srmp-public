@@ -1,0 +1,155 @@
+name: Server image
+
+# Builds the headless SRMP server runtime image and publishes it to GHCR.
+# The image contains the Wine/Xvfb/SteamCMD runtime only — no game content, no
+# SRML and no SRMP build — so it is safe to build on public runners. The game is
+# installed by the entrypoint on the operator's own server at first start.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'server/**'
+      - '.github/workflows/docker-server.yml'
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'server/**'
+      - '.github/workflows/docker-server.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository }}-server
+
+jobs:
+  validate:
+    name: Validate server scripts
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check shell syntax
+        run: |
+          set -euo pipefail
+          for script in server/entrypoint.sh server/steam-login.sh; do
+            if [ ! -f "$script" ]; then
+              echo "Missing required script: $script" >&2
+              exit 1
+            fi
+            bash -n "$script"
+            echo "$script: syntax OK"
+          done
+
+      - name: Lint shell scripts
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends shellcheck
+
+          # SC2086 is intentional: the optional -srmp-game argument relies on
+          # word splitting of a ${VAR:+...} expansion.
+          EXCLUDE=--exclude=SC2086
+
+          # Warnings are surfaced for review but do not fail the build; only
+          # genuine errors block publishing.
+          shellcheck --severity=warning $EXCLUDE \
+            server/entrypoint.sh server/steam-login.sh || true
+
+          shellcheck --severity=error $EXCLUDE \
+            server/entrypoint.sh server/steam-login.sh
+
+      - name: Verify the image ships no game content
+        run: |
+          set -euo pipefail
+          # A build-time game download would put proprietary files in a public
+          # image. These tokens belong in the entrypoint (runtime), never in the
+          # Dockerfile, so their presence anywhere in it is the tripwire.
+          if grep -nE 'app_update|SlimeRancher\.exe|SRMLInstaller' server/Dockerfile; then
+            echo "Dockerfile references game or mod content — it must stay runtime-only." >&2
+            exit 1
+          fi
+          for path in server/game server/mods server/steam; do
+            if [ -e "$path" ]; then
+              echo "Build context contains operator data: $path" >&2
+              exit 1
+            fi
+          done
+          echo 'Image build context is free of game content.'
+
+  build:
+    name: Build and publish image
+    runs-on: ubuntu-latest
+    needs: validate
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        # Pull requests from forks get no registry credentials, so build only.
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ./server
+          file: ./server/Dockerfile
+          # Wine and SteamCMD are x86 only; arm64 runners cannot host this.
+          platforms: linux/amd64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Summary
+        if: github.event_name != 'pull_request'
+        run: |
+          {
+            echo '### Server image published'
+            echo
+            echo 'Tags:'
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}"
+            echo '```'
+            echo
+            echo 'Pull it on your server with:'
+            echo '```bash'
+            echo "docker pull ${{ env.IMAGE_NAME }}:latest"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

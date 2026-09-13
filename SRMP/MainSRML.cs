@@ -74,6 +74,9 @@ namespace SRMultiplayer
             m_GameObject.AddComponent<MultiplayerUI>();
             m_GameObject.AddComponent<ChatUI>();
             m_GameObject.AddComponent<SRMPConsole>();
+            //added after MultiplayerUI so it can override the interactive username,
+            //and before EpicApplication which logs in using that username
+            m_GameObject.AddComponent<SRMultiplayer.Server.AutoHost>();
             m_GameObject.AddComponent<EpicApplication>();
 
             //mark all mod objects and do not destroy
