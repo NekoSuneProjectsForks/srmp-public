@@ -15,7 +15,7 @@ MODS_DIR="${MODS_DIR:-/mods}"
 STEAM_APPID="${STEAM_APPID:-433340}"
 STEAM_USER="${STEAM_USER:-}"
 STEAM_UPDATE="${STEAM_UPDATE:-auto}"      # auto | always | never
-RENDER_MODE="${RENDER_MODE:-software}"    # software | nographics
+RENDER_MODE="${RENDER_MODE:-nographics}"  # nographics | software
 DISPLAY_NUM="${DISPLAY_NUM:-99}"
 SCREEN="${SCREEN:-640x480x24}"
 SRML_URL="${SRML_URL:-https://cdn.0x00sec.xyz/files/games/Slime/SRMLInstaller.exe}"
@@ -435,8 +435,11 @@ run_server() {
       render_args=(-batchmode -nographics)
       ;;
     software)
-      log "render mode: software (llvmpipe on Xvfb)"
-      render_args=(-screen-width 640 -screen-height 480 -screen-fullscreen 0 -force-glcore)
+      # No -force-glcore here: this build ships only D3D11 shaders, so forcing
+      # OpenGL Core makes InitializeEngineGraphics fail before the game starts.
+      # Letting it pick D3D11 routes through Wine's wined3d onto llvmpipe.
+      log "render mode: software (D3D11 via wined3d on llvmpipe)"
+      render_args=(-screen-width 640 -screen-height 480 -screen-fullscreen 0)
       ;;
     *)
       die "RENDER_MODE must be software or nographics (got '${RENDER_MODE}')"

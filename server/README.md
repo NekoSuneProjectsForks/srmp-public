@@ -94,7 +94,7 @@ docker run -d --name srmp-server \
   -v srmp-wine:/wine \
   -e STEAM_USER=your_steam_name \
   -e SRMP_USERNAME=Server \
-  -e RENDER_MODE=software \
+  -e RENDER_MODE=nographics \
   ghcr.io/nekosunevr/srmp-public-server:latest
 ```
 
@@ -153,11 +153,19 @@ A VPS has no GPU, so `RENDER_MODE` picks how the game deals with that:
 
 | Mode | What it does | Trade-off |
 | --- | --- | --- |
-| `software` (default) | Renders at 640x480 through Mesa llvmpipe on an Xvfb virtual display. | Works the way a normal game launch does, but burns CPU drawing frames nobody sees. |
-| `nographics` | `-batchmode -nographics`; Unity skips rendering entirely. | Far cheaper. Not every non-server Unity build tolerates it — the game may fail to start or misbehave. |
+| `nographics` (default) | `-batchmode -nographics`; Unity skips graphics initialization entirely. | Cheapest, and avoids the whole graphics problem. Not every non-server Unity build tolerates it. |
+| `software` | Runs the game's real D3D11 path through Wine's wined3d on Mesa llvmpipe, at 640x480. | Closer to a normal launch, but burns CPU drawing frames nobody sees. |
 
-Start with `software`. Once it is up and stable, try `nographics` — if the
-server still reaches "FRIEND CODE", keep it, since it saves most of the CPU.
+**Do not add `-force-glcore`.** This build ships D3D11 shaders only, so forcing
+OpenGL Core kills the game before it starts:
+
+```
+Forced GfxDevice 'OpenGL Core' was not built from editor, shaders will not be available
+InitializeEngineGraphics failed
+```
+
+If `nographics` misbehaves, switch to `software` — it keeps the D3D11 path the
+game actually ships shaders for.
 
 ## Already have the game on the box?
 
@@ -171,7 +179,7 @@ missing.
 | --- | --- |
 | `STEAM_USER` | Steam account that owns the game. Blank means no download. |
 | `STEAM_UPDATE` | `auto` (download only if missing), `always`, or `never`. |
-| `RENDER_MODE` | `software` or `nographics`. See above. |
+| `RENDER_MODE` | `nographics` (default) or `software`. See above. |
 | `SRMP_USERNAME` | Name the host player appears as. |
 | `SRMP_GAME` | Existing save to host. Blank creates a new world. |
 | `SRMP_NEW_GAME_NAME` | Display name used when creating a new world. |
@@ -284,8 +292,9 @@ game's own output (prefixed `[game]`) and of Unity's `Player.log` (prefixed
 - mentions of `steam_api64` or Steam — the game wants a running Steam client.
   The workaround is running Steam inside the same Wine prefix, a heavier setup
   than this image provides.
-- mentions of GL, GLX or the display — software rendering is not satisfying the
-  game. Try `RENDER_MODE=nographics`.
+- `InitializeEngineGraphics failed`, or mentions of GL/GLX/the display —
+  graphics init is failing. Use `RENDER_MODE=nographics`, and make sure nothing
+  is passing `-force-glcore`: this build has D3D11 shaders only.
 
 Live output from the game is streamed as it happens, so `docker logs -f
 srmp-server` shows the failure as it occurs.

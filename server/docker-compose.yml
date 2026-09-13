@@ -27,10 +27,12 @@ services:
       STEAM_UPDATE: "auto"
 
       # --- Rendering ---------------------------------------------------------
-      # No GPU on a VPS. "software" renders via llvmpipe on a virtual display.
-      # "nographics" skips rendering entirely — much cheaper, but not every
-      # Unity build tolerates it. Try software first, then nographics.
-      RENDER_MODE: "software"
+      # No GPU on a VPS. "nographics" skips rendering entirely — cheapest, and
+      # it sidesteps graphics init altogether. "software" runs the real D3D11
+      # path through Wine's wined3d on llvmpipe; use it only if nographics
+      # misbehaves. Do not add -force-glcore: this build has D3D11 shaders only
+      # and forcing OpenGL Core fails with "InitializeEngineGraphics failed".
+      RENDER_MODE: "nographics"
 
       # --- Server ------------------------------------------------------------
       SRMP_USERNAME: "Server"
