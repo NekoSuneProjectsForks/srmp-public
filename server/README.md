@@ -110,7 +110,7 @@ give it a while. Watch it with `docker logs -f srmp-server`. When the host is up
 Ask for it any time:
 
 ```bash
-docker exec srmp-server code
+docker exec srmp-server srmp code
 ```
 
 **The friend code changes on every restart.** It is generated per lobby, not
@@ -128,6 +128,10 @@ No scripts to download — the image dispatches on its first argument:
 | `stop` | Asks a running server to save and quit. |
 | `shell` | A shell inside the runtime, for poking around. |
 | `help` | Usage, with copy-pasteable examples. |
+
+At container start the image runs `serve` by default, so `docker run IMAGE` just
+works. `docker exec` bypasses the entrypoint, so use the `srmp` command there:
+`docker exec srmp-server srmp code`.
 
 ```bash
 docker run --rm ghcr.io/nekosunevr/srmp-public-server:latest help
@@ -175,6 +179,7 @@ missing.
 | `SRMP_STATUS_INTERVAL` | Seconds between "N players online" lines. `0` disables. |
 | `SRMP_AUTOSAVE_INTERVAL` | Seconds between forced saves. `0` disables. |
 | `SRML_URL` | Where to fetch `SRMLInstaller.exe`. Override if the default 404s. |
+| `SHUTDOWN_GRACE_SECONDS` | How long to let the game save and quit on stop. Default 45. |
 
 The entrypoint rewrites `game/SRMP/autohost.json` from these on every boot, so
 edit the compose file rather than the JSON.
@@ -207,7 +212,7 @@ timeout must be **larger** than that value — hence `--stop-timeout 60` above, 
 To stop it from elsewhere without stopping the container:
 
 ```bash
-docker exec srmp-server stop
+docker exec srmp-server srmp stop
 ```
 
 Do not `docker kill` or `kill -9` — that skips the save entirely.

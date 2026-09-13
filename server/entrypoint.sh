@@ -63,8 +63,11 @@ Typical first run:
     -e SRMP_USERNAME=Server \
     IMAGE
 
-  # 3. read the friend code
-  docker exec srmp-server code
+  # 3. read the friend code (docker exec needs the `srmp` command)
+  docker exec srmp-server srmp code
+
+  # 4. stop it cleanly (saves the world first)
+  docker stop srmp-server
 TXT
 }
 

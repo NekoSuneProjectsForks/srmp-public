@@ -59,7 +59,10 @@ ENV LIBGL_ALWAYS_SOFTWARE=1 \
     DISPLAY_NUM=99
 
 COPY entrypoint.sh /usr/local/bin/
-RUN chmod +x /usr/local/bin/entrypoint.sh
+# `docker exec` bypasses ENTRYPOINT, so expose the same dispatcher as a plain
+# command: `docker exec srmp-server srmp code`.
+RUN chmod +x /usr/local/bin/entrypoint.sh \
+ && ln -s /usr/local/bin/entrypoint.sh /usr/local/bin/srmp
 
 VOLUME ["/game", "/wine", "/steam"]
 
