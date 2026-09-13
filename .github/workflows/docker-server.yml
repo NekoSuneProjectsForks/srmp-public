@@ -163,6 +163,19 @@ jobs:
           echo '--- wine is usable ---'
           docker run --rm --entrypoint sh srmp-server:ci -c 'wine --version'
 
+          echo '--- wine can run .NET (needed by the SRML installer) ---'
+          # Disabling mscoree, or shipping no Wine Mono, makes every .NET exe die
+          # with "ShellExecuteEx failed: File not found" at runtime only.
+          docker run --rm --entrypoint sh srmp-server:ci -c '
+            set -e
+            case "${WINEDLLOVERRIDES:-}" in
+              *mscoree*) echo "mscoree is overridden; .NET apps will not start" >&2; exit 1 ;;
+            esac
+            ls /usr/share/wine/mono/*.msi >/dev/null 2>&1 \
+              || { echo "no Wine Mono MSI staged in /usr/share/wine/mono" >&2; exit 1; }
+            echo "wine .NET support ok"
+          '
+
           echo 'Smoke test passed.'
 
       - name: Push image

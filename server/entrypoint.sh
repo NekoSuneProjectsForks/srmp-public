@@ -17,7 +17,7 @@ STEAM_UPDATE="${STEAM_UPDATE:-auto}"      # auto | always | never
 RENDER_MODE="${RENDER_MODE:-software}"    # software | nographics
 DISPLAY_NUM="${DISPLAY_NUM:-99}"
 SCREEN="${SCREEN:-640x480x24}"
-SRML_URL="${SRML_URL:-https://github.com/Sm0lDelta/SRML/releases/latest/download/SRMLInstaller.exe}"
+SRML_URL="${SRML_URL:-https://cdn.0x00sec.xyz/files/games/Slime/SRMLInstaller.exe}"
 
 SRMP_USERNAME="${SRMP_USERNAME:-Server}"
 SRMP_GAME="${SRMP_GAME:-}"
@@ -75,14 +75,26 @@ TXT
 # Even in nographics mode Wine is happier with a display to talk to, and the
 # SRML installer runs under the same prefix.
 start_xvfb() {
+  # A restarting container keeps its filesystem, so a previous run's lock and
+  # socket survive. Xvfb then refuses to start ("Server is already active"),
+  # and the leftover socket makes the wait below succeed against a dead display.
+  if [[ -e "/tmp/.X${DISPLAY_NUM}-lock" ]] && ! pgrep -f "Xvfb :${DISPLAY_NUM}" >/dev/null 2>&1; then
+    log "clearing stale X lock from a previous run"
+    rm -f "/tmp/.X${DISPLAY_NUM}-lock" "/tmp/.X11-unix/X${DISPLAY_NUM}"
+  fi
+
   log "starting Xvfb on ${DISPLAY} (${SCREEN})"
   Xvfb "${DISPLAY}" -screen 0 "${SCREEN}" -nolisten tcp &
   XVFB_PID=$!
+
   for _ in $(seq 1 50); do
+    if ! kill -0 "${XVFB_PID}" 2>/dev/null; then
+      die "Xvfb died on startup — see its error above"
+    fi
     [[ -e "/tmp/.X11-unix/X${DISPLAY_NUM}" ]] && return 0
     sleep 0.1
   done
-  die "Xvfb failed to start"
+  die "Xvfb did not create its socket in time"
 }
 
 init_wine() {
@@ -192,25 +204,45 @@ install_srml() {
   fi
 
   local installer="${GAME_DIR}/SRMLInstaller.exe"
-  if [[ ! -f "${installer}" ]]; then
-    if [[ -f "${MODS_DIR}/SRMLInstaller.exe" ]]; then
-      log "using SRMLInstaller.exe from ${MODS_DIR}"
-      cp "${MODS_DIR}/SRMLInstaller.exe" "${installer}"
-    else
-      log "downloading SRMLInstaller.exe from ${SRML_URL}"
-      curl -sSL -o "${installer}" "${SRML_URL}" \
-        || die "could not download SRML. Drop SRMLInstaller.exe into ${MODS_DIR} instead."
-    fi
+  if [[ -f "${installer}" ]]; then
+    log "using SRMLInstaller.exe already in the game folder"
+  elif [[ -f "${MODS_DIR}/SRMLInstaller.exe" ]]; then
+    log "using SRMLInstaller.exe from ${MODS_DIR}"
+    cp "${MODS_DIR}/SRMLInstaller.exe" "${installer}"
+  else
+    log "downloading SRMLInstaller.exe from ${SRML_URL}"
+    # -f matters: without it curl saves a 404 page to the file and exits 0,
+    # leaving something that looks like an installer but is HTML.
+    curl -fsSL -o "${installer}" "${SRML_URL}" \
+      || die "could not download SRML. Drop SRMLInstaller.exe into ${MODS_DIR} instead."
+  fi
+
+  # A stray HTML error page or truncated download looks like a file but is not
+  # an executable; MZ is the DOS header every Windows binary starts with.
+  if [[ "$(head -c 2 "${installer}")" != "MZ" ]]; then
+    die "${installer} is not a Windows executable (probably a failed download).
+Delete it and retry, or drop a known-good SRMLInstaller.exe into ${MODS_DIR}."
   fi
 
   log "patching the game with SRML"
-  # The installer is a console app that patches the folder it sits in. It waits
-  # on a keypress at the end, so feed it stdin rather than letting it block.
+  # The installer is a .NET console app that patches the folder it sits in. It
+  # waits on a keypress at the end, so feed it stdin rather than letting it block.
   ( cd "${GAME_DIR}" && wine SRMLInstaller.exe < /dev/null ) || true
   wineserver -w
 
-  [[ -f "${managed}/SRML.dll" ]] \
-    || die "SRML patch did not produce ${managed}/SRML.dll — check the Wine output above"
+  if [[ ! -f "${managed}/SRML.dll" ]]; then
+    die "SRML patch did not produce ${managed}/SRML.dll.
+
+Check the Wine output above. Common causes:
+  * 'ShellExecuteEx failed' or a mono/.NET error — Wine could not run the
+    installer. This image stages Wine Mono for exactly that; if it still fails,
+    use the fallback below.
+  * the game folder is incomplete or read-only.
+
+Fallback that always works: install SRML on a Windows machine, then copy that
+already-patched game folder to this host and mount it at ${GAME_DIR}. The
+entrypoint detects a patched install and skips this step entirely."
+  fi
   log "SRML installed"
 }
 

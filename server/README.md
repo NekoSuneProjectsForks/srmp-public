@@ -225,9 +225,25 @@ in step 3. Unattended runs cannot answer that prompt.
 **`no game in /game and STEAM_USER is unset`** — set `STEAM_USER`, or mount an
 existing install and set `STEAM_UPDATE: "never"`.
 
-**`SRML patch did not produce .../SRML.dll`** — the SRML download or the Wine
-run failed. Check the Wine output above it. You can sidestep the download by
-dropping a known-good `SRMLInstaller.exe` into `./mods`.
+**`SRML patch did not produce .../SRML.dll`** — the installer did not run. Read
+the Wine output just above it:
+
+- `ShellExecuteEx failed: File not found` means Wine could not start the
+  installer as a .NET program. The image stages Wine Mono for this; if it still
+  fails, the Wine Mono version may not match the Wine package — rebuild with
+  `--build-arg WINE_MONO_VERSION=<version>`.
+- `is not a Windows executable` means a failed download left an HTML error page
+  in place of the installer. Delete `game/SRMLInstaller.exe` and retry, or drop
+  a known-good one into `./mods`.
+
+**Fallback that always works:** install SRML on a Windows machine, then copy
+that already-patched game folder to the server and mount it at `/game`. The
+entrypoint detects a patched install (`Assembly-CSharp_old.dll` present) and
+skips this step entirely.
+
+**`Server is already active for display 99`** — a restarting container keeps its
+filesystem, so a previous run's X lock survived. The entrypoint now clears stale
+locks on startup; if you see this on an older image, pull the latest.
 
 **`no SRMP.dll found`** — build it on Windows and copy it into `./mods`.
 
