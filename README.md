@@ -1,55 +1,66 @@
-# SRMP
-This is the code for the Slime Rancher MultiPlayer Mod (SRMP) by SatyPardus.
+# SRMP Revival
 
-You can join our discord here: https://discord.gg/Qp8SmuQ 
+SRMP is the Slime Rancher Multiplayer Mod originally created by SatyPardus. This repository is being revived for **Slime Rancher 1** and keeps the later networking/EOS/mod-compatibility work already present in the project.
 
-Check out the #srmp-github channel for collaboration!
+> This is for Slime Rancher 1. It is not a Slime Rancher 2 port.
 
-The user manual which includes compatability information, download and installation instructions and standard troubleshooting can be found [here](/manual.md).
+## Easy installation
 
-## How to setup your development enviroment
-- Clone the repository and open it in VS2022 or Rider
-- Go to the project properties->Reference Paths
-- Add your Slime Rancher managed path to it (Example: C:\Program Files (x86)\Steam\steamapps\common\Slime Rancher\SlimeRancher_Data\Managed\)
+The revival uses the **SRML build** as the supported installation path.
 
-You also need text-transform, install it for your user: `dotnet tool install -g dotnet-t4`
+1. Install SRML for Slime Rancher 1 and launch the game once.
+2. Close Slime Rancher.
+3. Download an SRMP Revival release package.
+4. Double-click `Install SRMP.cmd`.
 
-To build, select either the "Standalone" or "SRML" build option, depending on which modloader you got installed.
+The installer detects common Steam/Epic locations, validates the game folder and `SRML/Mods`, refuses to modify files while the game is running, backs up an existing SRMP build, SHA-256 verifies the replacement, and records enough information for `Uninstall SRMP.cmd` to restore the previous build.
 
-## Bug Status 
-Note: Bug list compiled from last known bug list of version 1584
+For a custom game path:
 
-FIXED:
-- Multiplayer window doesn't show up on resolutions < 1920x1080
-- Exchange sometimes skips rewards if multiple players put items in at the same time
-- Exchange chest disappears without rewards
-- Falling through world
+```bat
+"Install SRMP.cmd" -GamePath "D:\Games\Slime Rancher"
+```
 
-IN PROGRESS: N/A
+See [README_REVIVAL.md](README_REVIVAL.md) for release/build details.
 
-Known Bugs:
-- Plort collectors don't work properly sometimes (Playing effect but not pulling anything)
-- Nutcracker doesn't spit out right amount, or spits out "babies"
-- Slimes sometimes appear "angry" for other players
-- Game stutters when placing/removing gadgets
-- First time using the mod can apparently break a lot of things (slimes not eating) - Restarting the game fixes it
-- DLCs don't seem to be loaded correctly when leaving and joining
-- DLC are not initialized on game start, making the "You need following DLCs:" message pop up (Can be fixed by loading the "Manage DLCs" menu and trying again)
-- Gordos don't drop things sometimes
-- Slimes sometimes dont produce plorts
-- Drones get stuck in place sometimes
-- Chat sometimes empty for remote players
-- Upgrades sometimes does not get applied to All players
+## Revival reliability work
 
+The current revival branch includes targeted fixes for several failure modes found during the source audit:
 
-## Current Status
-[@Twirlbug](https://github.com/Twirlbug)
-- Currently working on going through the code, adding notes and fixing some of the bugs in my free time. 
-- I adore this mod and want to give both credit and a huge thank you to Saty for the origional creation of the mod. 
-I am slowly working my way through the list of bugs as seen above.
+- multiplayer chat Return-key focus/reopen race fixed;
+- null/blank remote chat entries are no longer rendered;
+- chat rendering no longer leaks faded GUI alpha into other windows;
+- long unbroken chat text can no longer overflow the old fixed wrapper buffer;
+- plort collectors use host authority while region ownership is still initializing;
+- non-authoritative collectors no longer emit `StartCollection` synchronization;
+- the global packet-handling suppression flag is forcibly cleared on every client/server handler exit, including custom-packet early returns and exceptions.
 
-### Notation Status
-Files in the following folders still need more notation:
-- Networking
-- Packets
-- Patches
+The historical bug list is tracked in [BUG_STATUS.md](BUG_STATUS.md). Timing-sensitive multiplayer defects are not called verified until they pass the real two-client matrix in [TESTING.md](TESTING.md).
+
+## Building
+
+Open `SRMP.sln` in Visual Studio 2022 or Rider and build the **SRML** configuration. The project still depends on Slime Rancher/SRML assemblies, so point the project Reference Paths at your Slime Rancher managed assemblies as needed.
+
+The T4 tool used by the project is:
+
+```text
+dotnet tool install -g dotnet-t4
+```
+
+After building, create a distributable Windows package from the real DLL:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\Package-Release.ps1 `
+  -SrmpDll "C:\path\to\SRMP.dll" `
+  -Version "2026.09.13"
+```
+
+The packager creates the installer ZIP and a SHA-256 checksum; it does not substitute an unrelated or untested binary.
+
+## Manual / compatibility information
+
+The original user manual and historical compatibility notes remain available in [manual.md](manual.md). Some troubleshooting workarounds in that document describe older builds, so use the revival bug status for current verification.
+
+## Credits
+
+SRMP was originally created by **SatyPardus** and later received maintenance and fixes from community contributors including Twirlbug and others in the repository history. The revival intentionally preserves that history and credit.
