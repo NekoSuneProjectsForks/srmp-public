@@ -1,0 +1,124 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - 'ci/**'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-and-build:
+    name: Validate and build SRML
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate PowerShell syntax
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $files = @(
+            'installer/Install-SRMP.ps1',
+            'installer/Uninstall-SRMP.ps1',
+            'scripts/Package-Release.ps1'
+          )
+
+          foreach ($file in $files) {
+            if (-not (Test-Path -LiteralPath $file)) {
+              throw "Missing required script: $file"
+            }
+
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $file),
+              [ref]$tokens,
+              [ref]$errors
+            ) | Out-Null
+
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Error "${file}: $($_.Message)" }
+              throw "PowerShell syntax validation failed for $file"
+            }
+          }
+
+          Write-Host 'PowerShell syntax validation passed.'
+
+      - name: Validate installer layout
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $required = @(
+            'Install SRMP.cmd',
+            'Uninstall SRMP.cmd',
+            'installer/Install-SRMP.ps1',
+            'installer/Uninstall-SRMP.ps1',
+            'scripts/Package-Release.ps1',
+            'SRMP/SRMP.csproj'
+          )
+
+          foreach ($path in $required) {
+            if (-not (Test-Path -LiteralPath $path)) {
+              throw "Required file is missing: $path"
+            }
+          }
+
+          $installer = Get-Content -LiteralPath 'installer/Install-SRMP.ps1' -Raw
+          if ($installer -notmatch 'SRML\\Mods') {
+            throw 'Installer no longer targets SRML\\Mods.'
+          }
+
+      - name: Audit project references
+        shell: pwsh
+        run: |
+          $project = Get-Content -LiteralPath 'SRMP/SRMP.csproj' -Raw
+
+          if ($project -match '<HintPath>[A-Za-z]:\\') {
+            Write-Warning 'SRMP.csproj still contains an absolute Windows HintPath. CI will continue because a local fallback reference also exists, but this should be removed in a future cleanup.'
+          }
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Install dotnet-t4
+        shell: pwsh
+        run: dotnet tool install --global dotnet-t4
+
+      - name: Build SRML configuration
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          msbuild 'SRMP.sln' /m /restore /p:Configuration=SRML /p:Platform=AnyCPU /verbosity:minimal
+
+          $dll = 'Builds/SRMP/SRMP.dll'
+          if (-not (Test-Path -LiteralPath $dll -PathType Leaf)) {
+            throw "Build completed without producing expected output: $dll"
+          }
+
+          $hash = (Get-FileHash -LiteralPath $dll -Algorithm SHA256).Hash
+          Write-Host "SRMP.dll SHA256: $hash"
+
+      - name: Upload SRMP build
+        uses: actions/upload-artifact@v4
+        with:
+          name: SRMP-SRML-${{ github.sha }}
+          path: |
+            Builds/SRMP/SRMP.dll
+            Builds/SRMP/SRMP.pdb
+          if-no-files-found: error
+          retention-days: 14

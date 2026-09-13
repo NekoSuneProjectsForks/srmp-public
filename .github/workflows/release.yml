@@ -1,0 +1,132 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version label used in the packaged ZIP'
+        required: true
+        default: 'dev'
+      publish_release:
+        description: 'Create a GitHub Release (manual runs only if true)'
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  build-package-release:
+    name: Build and package SRMP
+    runs-on: windows-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Install dotnet-t4
+        shell: pwsh
+        run: dotnet tool install --global dotnet-t4
+
+      - name: Validate packaging script
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path 'scripts/Package-Release.ps1'),
+            [ref]$tokens,
+            [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw 'Package-Release.ps1 contains PowerShell syntax errors.'
+          }
+
+      - name: Build SRML configuration
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          msbuild 'SRMP.sln' /m /restore /p:Configuration=SRML /p:Platform=AnyCPU /verbosity:minimal
+
+          if (-not (Test-Path -LiteralPath 'Builds/SRMP/SRMP.dll' -PathType Leaf)) {
+            throw 'Expected Builds/SRMP/SRMP.dll was not produced.'
+          }
+
+      - name: Select package version
+        id: version
+        shell: pwsh
+        run: |
+          if ('${{ github.event_name }}' -eq 'push' -and '${{ github.ref_type }}' -eq 'tag') {
+            $version = '${{ github.ref_name }}'
+          } else {
+            $version = '${{ inputs.version }}'
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          Write-Host "Packaging version: $version"
+
+      - name: Package release
+        shell: pwsh
+        run: |
+          ./scripts/Package-Release.ps1 `
+            -SrmpDll 'Builds/SRMP/SRMP.dll' `
+            -Version '${{ steps.version.outputs.version }}' `
+            -OutputDirectory 'dist'
+
+      - name: Upload packaged release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SRMP-Revival-${{ steps.version.outputs.version }}
+          path: |
+            dist/*.zip
+            dist/*SHA256.txt
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Create GitHub Release for tag
+        if: github.event_name == 'push' && github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = '${{ github.ref_name }}'
+          $files = Get-ChildItem -LiteralPath 'dist' -File | Where-Object {
+            $_.Extension -eq '.zip' -or $_.Name -like '*SHA256.txt'
+          }
+          if ($files.Count -lt 2) {
+            throw 'Expected release ZIP and checksum were not produced.'
+          }
+          gh release create $tag @($files.FullName) `
+            --repo '${{ github.repository }}' `
+            --title "SRMP Revival $tag" `
+            --generate-notes
+
+      - name: Create GitHub Release for manual run
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_release == true
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = '${{ steps.version.outputs.version }}'
+          $tag = if ($version.StartsWith('v')) { $version } else { "v$version" }
+          $files = Get-ChildItem -LiteralPath 'dist' -File | Where-Object {
+            $_.Extension -eq '.zip' -or $_.Name -like '*SHA256.txt'
+          }
+          gh release create $tag @($files.FullName) `
+            --repo '${{ github.repository }}' `
+            --target '${{ github.sha }}' `
+            --title "SRMP Revival $tag" `
+            --generate-notes
