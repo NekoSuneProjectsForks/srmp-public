@@ -103,6 +103,42 @@ public class ChatUI : SRSingleton<ChatUI>
         GUI.contentColor = previous;
     }
 
+    /// <summary>
+    /// Completes the last word from the names that make sense here: everyone
+    /// online, plus any extra names the server offered (banned players, who are
+    /// by definition not online and so cannot be derived locally).
+    /// </summary>
+    private static string CompleteName(string current)
+    {
+        if (string.IsNullOrEmpty(current)) return current;
+
+        int split = current.LastIndexOf(' ');
+        string prefix = split >= 0 ? current.Substring(0, split + 1) : "";
+        string word = split >= 0 ? current.Substring(split + 1) : current;
+
+        //a bare command is not a name; leave it to the hint list
+        if (word.StartsWith("/") || word.Length == 0) return current;
+
+        var candidates = Globals.Players.Values
+            .Where(p => p != null && !string.IsNullOrEmpty(p.Username))
+            .Select(p => p.Username)
+            .Concat(Globals.SuggestedNames ?? new List<string>())
+            .Where(n => !string.IsNullOrEmpty(n))
+            .Distinct(System.StringComparer.OrdinalIgnoreCase)
+            .Where(n => n.StartsWith(word, System.StringComparison.OrdinalIgnoreCase))
+            .OrderBy(n => n)
+            .ToList();
+
+        if (candidates.Count == 0) return current;
+
+        //cycle rather than stopping at the first, so duplicates are reachable
+        int next = candidates.FindIndex(n =>
+            string.Equals(n, word, System.StringComparison.OrdinalIgnoreCase)) + 1;
+        if (next >= candidates.Count) next = 0;
+
+        return prefix + candidates[next];
+    }
+
     private void OnGUI()
     {
         if (!Globals.IsMultiplayer)
@@ -135,6 +171,15 @@ public class ChatUI : SRSingleton<ChatUI>
                 GUI.FocusControl("ChatInput");
 
                 Event e = Event.current;
+
+                //Tab completes the word under the cursor. Consumed on KeyDown so
+                //the control does not also treat it as a focus change.
+                if (e.type == EventType.KeyDown && e.keyCode == KeyCode.Tab)
+                {
+                    message = CompleteName(message ?? "");
+                    e.Use();
+                }
+
                 if (e.rawType == EventType.KeyUp && e.keyCode == KeyCode.Return)
                 {
                     string outgoing = message ?? "";

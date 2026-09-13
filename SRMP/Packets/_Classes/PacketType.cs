@@ -131,5 +131,6 @@
         Ping = 117,
         Pong = 118,
         PlayerPings = 119,
+        NameSuggestions = 120,
     }
 }

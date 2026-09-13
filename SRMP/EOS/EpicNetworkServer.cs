@@ -65,7 +65,11 @@ namespace SRMultiplayer.Networking
             Globals.EpicToPlayer.Add(EpicApplication.Instance.Authentication.ProductUserId, id);
             Globals.ClientLoaded = true;
 
-            Directory.CreateDirectory(Path.Combine(SRMP.ModDataPath, SRSingleton<GameContext>.Instance.AutoSaveDirector.SavedGame.GetName()));
+            var worldName = SRSingleton<GameContext>.Instance.AutoSaveDirector.SavedGame.GetName();
+            Directory.CreateDirectory(Path.Combine(SRMP.ModDataPath, worldName));
+
+            //bans belong to the world, so they follow whichever save is hosted
+            Server.BanList.LoadForWorld(worldName);
 
             foreach(var netRegion in Globals.Regions.Values)
             {
@@ -276,6 +280,18 @@ namespace SRMultiplayer.Networking
 
             var vr = im.ReadBoolean();
             
+            //checked before anything else accepts the player: the EOS id is
+            //observed by us during the handshake, so it cannot be forged by
+            //renaming or by editing client-side files
+            if (Globals.PlayerToEpic.TryGetValue(pid, out var epicId)
+                && Server.BanList.IsBanned(epicId.ToString()))
+            {
+                var ban = Server.BanList.Find(epicId.ToString());
+                SRMP.Log($"[Bans] Refused banned player {username} ({epicId})");
+                DisconnectCustom(player, $"You are banned from this world: {ban.Reason}");
+                return;
+            }
+
             if (build != Globals.Version)
             {
                 SRMP.Log($"Version Mismatch! YOU({Globals.Version}) vs PLAYER({build})");

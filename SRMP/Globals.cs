@@ -36,6 +36,12 @@ namespace SRMultiplayer
         /// </summary>
         public static int HostFps;
 
+        /// <summary>
+        /// Names the server offered for tab completion that the client could not
+        /// work out locally - currently banned names, for /unban.
+        /// </summary>
+        public static List<string> SuggestedNames = new List<string>();
+
         public static string ServerCode
         {
             get

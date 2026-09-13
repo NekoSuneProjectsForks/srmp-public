@@ -94,6 +94,7 @@ namespace SRMultiplayer.Networking
                 case PacketType.WorldTime: OnWorldTime(new PacketWorldTime(im)); break;
                 case PacketType.Pong: OnPong(new PacketPong(im)); break;
                 case PacketType.PlayerPings: OnPlayerPings(new PacketPlayerPings(im)); break;
+                case PacketType.NameSuggestions: OnNameSuggestions(new PacketNameSuggestions(im)); break;
                 case PacketType.WorldFastForward: OnWorldFastForward(new PacketWorldFastForward(im)); break;
                 case PacketType.WorldProgress: OnWorldProgress(new PacketWorldProgress(im)); break;
                 case PacketType.WorldKey: OnWorldKey(new PacketWorldKey(im)); break;
@@ -1356,6 +1357,11 @@ namespace SRMultiplayer.Networking
 
             SRMP.RecordPingSample(rtt);
             ApplyServerWorldTime(packet.WorldTime, rtt * 0.5f);
+        }
+
+        private static void OnNameSuggestions(PacketNameSuggestions packet)
+        {
+            Globals.SuggestedNames = packet.Names ?? new System.Collections.Generic.List<string>();
         }
 
         private static void OnPlayerPings(PacketPlayerPings packet)

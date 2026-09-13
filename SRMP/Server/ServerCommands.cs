@@ -50,6 +50,9 @@ namespace SRMultiplayer.Server
                     case "list": case "players": ListPlayers(sender); break;
                     case "home": Home(sender); break;
                     case "tp": case "teleport": Teleport(sender, args); break;
+                    case "ban": Ban(sender, args); break;
+                    case "unban": case "pardon": Unban(sender, args); break;
+                    case "banlist": case "bans": BanListing(sender); break;
                     default:
                         Reply(sender, $"Unknown command '/{command}'. Try /help.");
                         break;
@@ -93,6 +96,7 @@ namespace SRMultiplayer.Server
             if (IsOperator(sender))
             {
                 Reply(sender, "Operator: /tp <player> [destination|home]");
+                Reply(sender, "Operator: /ban <player> [reason] | /unban <name> | /banlist");
             }
         }
 
@@ -183,6 +187,93 @@ namespace SRMultiplayer.Server
             if (target != sender)
             {
                 Reply(target, $"{sender.Username} teleported you to {destPlayer.Username}.");
+            }
+        }
+
+        private static void Ban(NetworkPlayer sender, string[] args)
+        {
+            if (!IsOperator(sender)) { Reply(sender, "/ban is operator only."); return; }
+            if (args.Length < 1) { Reply(sender, "Usage: /ban <player> [reason]"); return; }
+
+            var target = FindPlayer(args[0]);
+            if (target == null) { Reply(sender, $"No player called '{args[0]}' is online."); return; }
+            if (target.IsLocal) { Reply(sender, "Refusing to ban the host."); return; }
+            if (IsOperator(target)) { Reply(sender, $"{target.Username} is an operator."); return; }
+
+            if (!Globals.PlayerToEpic.TryGetValue(target.ID, out var epicId))
+            {
+                Reply(sender, $"No stable id for {target.Username}; cannot ban safely.");
+                return;
+            }
+
+            string reason = args.Length > 1 ? string.Join(" ", args.Skip(1).ToArray()) : "";
+            BanList.Add(epicId.ToString(), target.Username, reason, sender.Username);
+
+            //a ban is a kick that also sticks, and it is deliberately a normal
+            //disconnect so the player is free to join anywhere else
+            NetworkServer.Instance.DisconnectCustom(target,
+                $"You are banned from this world: {(string.IsNullOrEmpty(reason) ? "No reason given" : reason)}");
+
+            Reply(sender, $"Banned {target.Username}.");
+            BroadcastSuggestions();
+        }
+
+        private static void Unban(NetworkPlayer sender, string[] args)
+        {
+            if (!IsOperator(sender)) { Reply(sender, "/unban is operator only."); return; }
+
+            if (args.Length < 1)
+            {
+                //also refreshes the caller's tab completion for the next attempt
+                BanListing(sender);
+                Reply(sender, "Usage: /unban <name>  (press Tab to complete)");
+                return;
+            }
+
+            var removed = BanList.Remove(string.Join(" ", args));
+            Reply(sender, removed == null
+                ? $"'{string.Join(" ", args)}' is not banned."
+                : $"Unbanned {removed.Username}.");
+
+            BroadcastSuggestions();
+        }
+
+        private static void BanListing(NetworkPlayer sender)
+        {
+            if (!IsOperator(sender)) { Reply(sender, "/banlist is operator only."); return; }
+
+            SendSuggestions(sender);
+
+            if (BanList.Count == 0) { Reply(sender, "Nobody is banned from this world."); return; }
+
+            Reply(sender, $"Banned ({BanList.Count}):");
+            foreach (var entry in BanList.Entries)
+            {
+                Reply(sender, $"  {entry.Username} - {entry.Reason} (by {entry.BannedBy}, {entry.BannedAt})");
+            }
+        }
+
+        /// <summary>
+        /// Gives a client the names it cannot derive locally, so Tab can complete
+        /// a banned player who is by definition not online.
+        /// </summary>
+        private static void SendSuggestions(NetworkPlayer player)
+        {
+            if (player.IsLocal)
+            {
+                Globals.SuggestedNames = BanList.Names;
+                return;
+            }
+
+            new PacketNameSuggestions { Names = BanList.Names }
+                .Send(player, NetDeliveryMethod.ReliableOrdered);
+        }
+
+        private static void BroadcastSuggestions()
+        {
+            foreach (var player in Globals.Players.Values.ToList())
+            {
+                if (player != null && IsOperator(player)) SendSuggestions(player);
             }
         }
 

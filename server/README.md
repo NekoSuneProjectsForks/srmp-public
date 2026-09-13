@@ -183,6 +183,34 @@ privately rather than broadcast.
 | `/list` | anyone | Everyone online with their pings. |
 | `/home` | anyone | Teleport yourself back to the ranch. |
 | `/tp <player> [dest]` | operator | One argument moves you to that player; two moves the first to the second. `home` is a valid destination. |
+| `/ban <player> [reason]` | operator | Bans and disconnects a player from this world. |
+| `/unban <name>` | operator | Lifts a ban. Press Tab to complete banned names. |
+| `/banlist` | operator | Shows who is banned and why. |
+
+Press **Tab** to complete a player name, cycling through matches. Online players
+are always completable; banned names are sent to operators so `/unban` can
+complete someone who is by definition not online.
+
+### How bans work
+
+Bans are keyed on the **EOS ProductUserId**, not the display name. The server
+observes that id itself during the connection handshake, so renaming does not
+evade a ban and a client cannot forge it by editing its own files. (There is no
+SteamID64 available here - the mod authenticates through EOS with anonymous
+device credentials, never through Steam.)
+
+The list is stored per world at:
+
+```
+game/SRMP/<world name>/bans.json
+```
+
+Because saves live on the `./saves` mount and this lives beside the world it
+belongs to, bans survive restarts and follow the save. Hosting a different world
+uses that world's list.
+
+A ban is a normal disconnect that also sticks. It bars the player from **this
+world only** - they can still join other servers and host their own games.
 
 Operators are set with `SRMP_OPERATORS` (comma separated in-game names). On a
 headless server nobody is sitting at the host, so **if you leave it empty no one
