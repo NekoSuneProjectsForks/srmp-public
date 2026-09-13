@@ -30,6 +30,13 @@ namespace SRMultiplayer.Networking
 
         public void Connect(ProductUserId serverUserId)
         {
+            if (serverUserId == null)
+            {
+                SRMP.Log("Cannot connect: server user id is null.");
+                Status = NetworkClientStatus.Disconnected;
+                return;
+            }
+
             this.serverUserId = serverUserId;
             Status = NetworkClientStatus.Connecting;
 
@@ -40,6 +47,9 @@ namespace SRMultiplayer.Networking
 
         public void SendPacket(IPacket packet, PacketReliability packetReliability = PacketReliability.ReliableOrdered)//, byte channel = 0)
         {
+            if (packet == null || serverUserId == null || Status == NetworkClientStatus.Disconnected || Status == NetworkClientStatus.None)
+                return;
+
             NetOutgoingMessage om = new NetOutgoingMessage();
             om.Data = Array.Empty<byte>();
             
@@ -79,9 +89,15 @@ namespace SRMultiplayer.Networking
                 byte fragmentIndex = im.ReadByte();
                 byte totalFragments = im.ReadByte();
 
+                if (totalFragments == 0 || fragmentIndex >= totalFragments)
+                {
+                    SRMP.Log($"Discarded malformed packet fragment from server: type={packetType}, fragment={fragmentIndex}, total={totalFragments}");
+                    return;
+                }
+
                 byte[] payload = im.Data.Skip(4).ToArray();
 
-                if (!incompletePackets.TryGetValue(packetType, out var msg))
+                if (!incompletePackets.TryGetValue(packetType, out var msg) || msg.fragTotal != totalFragments)
                 {
                     msg = new IncompletePacket
                     {
@@ -100,10 +116,14 @@ namespace SRMultiplayer.Networking
                 if (msg.fragIndex >= msg.fragTotal)
                 {
                     List<byte> completeData = new List<byte>();
-                    int debugLogIndex = 0;
                     foreach (var frag in msg.fragments)
-                    {            
-                        debugLogIndex++;
+                    {
+                        if (frag == null)
+                        {
+                            SRMP.Log($"Discarded incomplete packet from server: {packetType}");
+                            incompletePackets.Remove(packetType);
+                            return;
+                        }
                         completeData.AddRange(frag);
                     }
                         
@@ -129,46 +149,70 @@ namespace SRMultiplayer.Networking
             }
             if (packetType == PacketType.Authentication)
             {
-                im.m_readPosition = 0;
-                
-                Globals.LocalID = im.ReadByte();
-
-                int playerCount = im.ReadInt32();
-                for (int i = 0; i < playerCount; i++)
+                try
                 {
-                    byte id = im.ReadByte();
-                    string username = im.ReadString();
-                    bool hasloaded = im.ReadBoolean();
-                    bool isVR = im.ReadBoolean();
+                    im.m_readPosition = 0;
+                    
+                    Globals.LocalID = im.ReadByte();
 
-                    var playerObject = new GameObject($"{username} ({id})");
-                    var player = playerObject.AddComponent<NetworkPlayer>();
-                    UnityEngine.Object.DontDestroyOnLoad(playerObject);
-
-                    player.ID = id;
-                    player.Username = username;
-                    player.HasLoaded = hasloaded;
-                    player.IsVR = isVR;
-                    Globals.Players.Add(id, player);
-
-                    if (id == Globals.LocalID)
+                    int playerCount = im.ReadInt32();
+                    for (int i = 0; i < playerCount; i++)
                     {
-                        Globals.LocalPlayer = player;
-                    }
-                    if (isVR)
-                        SRMP.Log($"Player {id} is a VR player!");
-                }
-                Globals.PartyID = new Guid(im.ReadBytes(16));
-                var gameMode = (PlayerState.GameMode)im.ReadByte();
-                Globals.CurrentGameName = im.ReadString();
-                SRMP.Log("Auth Complete");
-                Status = NetworkClientStatus.Connected;
-                SRSingleton<GameContext>.Instance.AutoSaveDirector.LoadNewGame("SRMultiplayerGame", Identifiable.Id.GOLD_SLIME, gameMode, () =>
-                {
-                    CloseConnection(serverUserId);
+                        byte id = im.ReadByte();
+                        string username = im.ReadString() ?? $"Player {id}";
+                        bool hasloaded = im.ReadBoolean();
+                        bool isVR = im.ReadBoolean();
 
-                    SceneManager.LoadScene(2);
-                });
+                        if (Globals.Players.TryGetValue(id, out var existingPlayer) && existingPlayer != null)
+                        {
+                            UnityEngine.Object.Destroy(existingPlayer.gameObject);
+                            Globals.Players.Remove(id);
+                        }
+
+                        var playerObject = new GameObject($"{username} ({id})");
+                        var player = playerObject.AddComponent<NetworkPlayer>();
+                        UnityEngine.Object.DontDestroyOnLoad(playerObject);
+
+                        player.ID = id;
+                        player.Username = username;
+                        player.HasLoaded = hasloaded;
+                        player.IsVR = isVR;
+                        Globals.Players[id] = player;
+
+                        if (id == Globals.LocalID)
+                        {
+                            Globals.LocalPlayer = player;
+                        }
+                        if (isVR)
+                            SRMP.Log($"Player {id} is a VR player!");
+                    }
+                    Globals.PartyID = new Guid(im.ReadBytes(16));
+                    var gameMode = (PlayerState.GameMode)im.ReadByte();
+                    Globals.CurrentGameName = im.ReadString();
+                    SRMP.Log("Auth Complete");
+                    Status = NetworkClientStatus.Connected;
+
+                    var gameContext = SRSingleton<GameContext>.Instance;
+                    if (gameContext == null || gameContext.AutoSaveDirector == null)
+                    {
+                        SRMP.Log("Cannot finish multiplayer authentication: GameContext/AutoSaveDirector is not ready.");
+                        Status = NetworkClientStatus.Disconnected;
+                        return;
+                    }
+
+                    gameContext.AutoSaveDirector.LoadNewGame("SRMultiplayerGame", Identifiable.Id.GOLD_SLIME, gameMode, () =>
+                    {
+                        if (serverUserId != null)
+                            CloseConnection(serverUserId);
+
+                        SceneManager.LoadScene(2);
+                    });
+                }
+                catch (Exception e)
+                {
+                    SRMP.Log($"Exception while applying authentication/join data:\n{e}");
+                    Status = NetworkClientStatus.Disconnected;
+                }
             }
             else
                 NetworkHandlerClient.HandlePacket(packetType, im);
@@ -176,13 +220,21 @@ namespace SRMultiplayer.Networking
 
         public override void OnShutdown()
         {
-            EpicApplication.Instance.Metrics.EndSession();
+            EpicApplication.Instance?.Metrics?.EndSession();
 
-            CloseConnection(serverUserId);
+            if (serverUserId != null)
+                CloseConnection(serverUserId);
+
+            Status = NetworkClientStatus.Disconnected;
+            serverUserId = null;
+            incompletePackets.Clear();
         }
 
         private void SendAuthentication()
         {
+            if (serverUserId == null)
+                return;
+
             NetOutgoingMessage om = new NetOutgoingMessage();
             om.Data = Array.Empty<byte>();
 
@@ -190,7 +242,7 @@ namespace SRMultiplayer.Networking
             om.Write((byte)0);
             om.Write((byte)1);
             
-            om.Write(Globals.Username);
+            om.Write(Globals.Username ?? "Player");
             om.Write(Globals.UserData.UUID.ToByteArray());
             om.Write(Globals.Version);
 
@@ -207,26 +259,31 @@ namespace SRMultiplayer.Networking
 
         public override void OnConnected(ProductUserId remoteUserId, NetworkConnectionType networkType, ConnectionEstablishedType connectionType)
         {
+            if (serverUserId == null || remoteUserId != serverUserId)
+                return;
 
             Status = NetworkClientStatus.Authenticating;
 
-            EpicApplication.Instance.Metrics.BeginSession();
+            EpicApplication.Instance?.Metrics?.BeginSession();
 
             SendAuthentication();
         }
 
         public override void OnDisconnected(ProductUserId remoteUserId, ConnectionClosedReason reason)
         {
-            EpicApplication.Instance.Metrics.EndSession();
+            if (serverUserId == null || remoteUserId != serverUserId)
+                return;
 
-            if(remoteUserId == EpicApplication.Instance.Authentication.ProductUserId)
+            SRMP.Log($"Disconnected from server: {reason}");
+            EpicApplication.Instance?.Metrics?.EndSession();
+
+            Status = NetworkClientStatus.Disconnected;
+            incompletePackets.Clear();
+            serverUserId = null;
+
+            if (SceneManager.GetActiveScene().buildIndex == 3)
             {
-                Status = NetworkClientStatus.Disconnected;
-
-                if (SceneManager.GetActiveScene().buildIndex == 3)
-                {
-                    SceneManager.LoadScene(2);
-                }
+                SceneManager.LoadScene(2);
             }
         }
         
