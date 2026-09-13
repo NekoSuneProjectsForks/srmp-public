@@ -58,9 +58,9 @@ DLL over:
 ### 2. Stage it on the Linux box
 
 ```bash
-cd server
-mkdir -p game mods steam
-cp /path/to/SRMP.dll mods/
+mkdir -p ~/srmp/{game,mods,steam}
+cp /path/to/SRMP.dll ~/srmp/mods/
+cd ~/srmp
 ```
 
 ### 3. Log in to Steam once
@@ -69,11 +69,14 @@ Steam Guard cannot be answered by an unattended container, so do it once by
 hand. SteamCMD caches the result in `./steam` and later boots reuse it.
 
 ```bash
-docker compose pull
-docker compose run --rm --entrypoint steam-login.sh srmp
+docker run --rm -it \
+  -v "$PWD/steam:/steam" \
+  -e STEAM_USER=your_steam_name \
+  ghcr.io/nekosunevr/srmp-public-server:latest login
 ```
 
-Then set `STEAM_USER` in `docker-compose.yml` to the same account.
+`-it` is required — without a terminal there is nowhere to type the Steam Guard
+code.
 
 > You must own Slime Rancher on that account. SteamCMD will not download a game
 > the account does not own.
@@ -81,11 +84,22 @@ Then set `STEAM_USER` in `docker-compose.yml` to the same account.
 ### 4. Start it
 
 ```bash
-docker compose up
+docker run -d --name srmp-server \
+  --restart unless-stopped \
+  --shm-size 1g \
+  --stop-timeout 60 \
+  -v "$PWD/game:/game" \
+  -v "$PWD/mods:/mods" \
+  -v "$PWD/steam:/steam" \
+  -v srmp-wine:/wine \
+  -e STEAM_USER=your_steam_name \
+  -e SRMP_USERNAME=Server \
+  -e RENDER_MODE=software \
+  ghcr.io/nekosunevr/srmp-public-server:latest
 ```
 
-First boot downloads the game (~1.2 GB), initializes the Wine prefix, patches
-SRML and creates a world, so give it a while. When the host is up:
+First boot downloads the game (~1.2 GB), patches SRML and creates a world, so
+give it a while. Watch it with `docker logs -f srmp-server`. When the host is up:
 
 ```
   ===================================
@@ -93,14 +107,41 @@ SRML and creates a world, so give it a while. When the host is up:
   ===================================
 ```
 
-The code is also in `game/SRMP/servercode.txt`:
+Ask for it any time:
 
 ```bash
-cat server/game/SRMP/servercode.txt
+docker exec srmp-server code
 ```
 
 **The friend code changes on every restart.** It is generated per lobby, not
 stored.
+
+## Commands built into the image
+
+No scripts to download — the image dispatches on its first argument:
+
+| Command | What it does |
+| --- | --- |
+| `serve` | Default. Installs anything missing, then runs the server. |
+| `login` | One-time interactive Steam login. Needs `-it`. |
+| `code` | Prints the current friend code. |
+| `stop` | Asks a running server to save and quit. |
+| `shell` | A shell inside the runtime, for poking around. |
+| `help` | Usage, with copy-pasteable examples. |
+
+```bash
+docker run --rm ghcr.io/nekosunevr/srmp-public-server:latest help
+```
+
+## Using docker compose instead
+
+`docker-compose.yml` in this folder does the same thing if you prefer it:
+
+```bash
+docker compose run --rm -it srmp login   # one-time
+docker compose up -d
+docker compose logs -f
+```
 
 ## Running without a GPU
 
@@ -145,12 +186,31 @@ name second, then picks that world's newest save.
 ## Stopping it safely
 
 ```bash
-docker compose stop
+docker stop srmp-server        # or: docker compose stop
 ```
 
-`stop_grace_period` gives the game time to flush. Do not `kill -9` — the world
-is saved by the game, and a hard kill costs you everything since the last
-autosave.
+Unity will not flush a save in response to a signal, so stopping is a handshake
+rather than a kill:
+
+1. `docker stop` sends `SIGTERM` to the entrypoint.
+2. The entrypoint writes `game/SRMP/shutdown.request`.
+3. The mod sees it, tells connected players in chat, calls the game's own save,
+   waits for it to flush, closes the lobby and quits.
+4. The entrypoint sees the game exit and the container stops.
+
+This takes a few seconds. `SHUTDOWN_GRACE_SECONDS` (default 45) is how long the
+entrypoint waits before forcing the game down; if it has to force it, it says so
+in the log and you lose progress since the last autosave. Your Docker stop
+timeout must be **larger** than that value — hence `--stop-timeout 60` above, and
+`stop_grace_period: 60s` in the compose file.
+
+To stop it from elsewhere without stopping the container:
+
+```bash
+docker exec srmp-server stop
+```
+
+Do not `docker kill` or `kill -9` — that skips the save entirely.
 
 ## Troubleshooting
 

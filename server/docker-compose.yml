@@ -1,3 +1,5 @@
+# Optional. Everything here can also be done with plain `docker run` —
+# see the README, or run:  docker run --rm IMAGE help
 services:
   srmp:
     # Prebuilt runtime image from CI. Contains Wine/Xvfb/SteamCMD only — the
@@ -18,7 +20,7 @@ services:
     environment:
       # --- Steam -------------------------------------------------------------
       # Run the one-time login first:
-      #   docker compose run --rm --entrypoint steam-login.sh srmp
+      #   docker compose run --rm -it srmp login
       STEAM_USER: ""
       STEAM_APPID: "433340"
       # auto = download only if the game is missing. always = update every boot.
@@ -39,9 +41,13 @@ services:
       SRMP_GAMEMODE: "CLASSIC"
       SRMP_STATUS_INTERVAL: "60"
       SRMP_AUTOSAVE_INTERVAL: "300"
+      # How long to let the game save and quit before it is forced down.
+      # Keep stop_grace_period comfortably above this.
+      SHUTDOWN_GRACE_SECONDS: "45"
     restart: unless-stopped
     # Wine plus a Unity scene needs headroom; software rendering is CPU-bound.
     shm_size: "1gb"
+    # Must exceed SHUTDOWN_GRACE_SECONDS so the world finishes saving.
     stop_grace_period: 60s
 
 volumes:
