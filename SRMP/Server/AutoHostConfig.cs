@@ -44,6 +44,13 @@ namespace SRMultiplayer.Server
         /// <summary>File the friend code is written to, relative to the SRMP data folder.</summary>
         public string ServerCodeFile = "servercode.txt";
 
+        /// <summary>
+        /// File watched for a shutdown request, relative to the SRMP data folder.
+        /// Creating it asks the host to save the world and quit cleanly, which is
+        /// the only way to stop a Unity game without losing progress.
+        /// </summary>
+        public string ShutdownRequestFile = "shutdown.request";
+
         /// <summary>Seconds between "players online" heartbeat lines. 0 disables.</summary>
         public float StatusIntervalSeconds = 60f;
 

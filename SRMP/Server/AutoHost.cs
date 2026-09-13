@@ -1,5 +1,7 @@
+using Lidgren.Network;
 using SRMultiplayer.EpicSDK;
 using SRMultiplayer.Networking;
+using SRMultiplayer.Packets;
 using System;
 using System.Collections;
 using System.IO;
@@ -24,6 +26,8 @@ namespace SRMultiplayer.Server
 
         private float m_LastStatus;
         private float m_LastSave;
+        private float m_LastShutdownCheck;
+        private bool m_ShuttingDown;
 
         public override void Awake()
         {
@@ -246,9 +250,87 @@ namespace SRMultiplayer.Server
             }
         }
 
+        /// <summary>Absolute path of the file that requests a clean shutdown.</summary>
+        public string ShutdownRequestPath
+        {
+            get { return Path.Combine(SRMP.ModDataPath, Config.ShutdownRequestFile); }
+        }
+
+        /// <summary>
+        /// Saves the world, tells everyone why, then quits. A container stop
+        /// cannot do this from outside: Unity will not flush a save in response
+        /// to a signal, so the request has to be handled in-process.
+        /// </summary>
+        private IEnumerator ShutdownSequence()
+        {
+            ServerLog("[AutoHost] Shutdown requested, saving world...");
+
+            try
+            {
+                new PacketPlayerChat { message = "Server is shutting down, saving..." }
+                    .SendToAll(NetDeliveryMethod.ReliableOrdered);
+            }
+            catch (Exception ex)
+            {
+                ServerLog("[AutoHost] Could not announce shutdown\n" + ex);
+            }
+
+            bool saved = false;
+            try
+            {
+                SRSingleton<GameContext>.Instance.AutoSaveDirector.SaveAllNow();
+                saved = true;
+            }
+            catch (Exception ex)
+            {
+                ServerLog("[AutoHost] Save failed during shutdown\n" + ex);
+            }
+
+            //give the save and the outgoing chat packet a moment to flush
+            yield return new WaitForSeconds(saved ? 3f : 1f);
+
+            if (saved) ServerLog("[AutoHost] World saved");
+
+            try
+            {
+                if (File.Exists(ShutdownRequestPath)) File.Delete(ShutdownRequestPath);
+            }
+            catch { /* the container is going away anyway */ }
+
+            ServerLog("[AutoHost] Closing lobby and quitting");
+
+            //SRMP.OnDestroy and EpicApplication.OnApplicationQuit tear the lobby
+            //and the EOS platform down as the application exits
+            Application.Quit();
+        }
+
         private void Update()
         {
             if (!IsHosting) return;
+
+            //poll rather than use a FileSystemWatcher: this has to work across a
+            //bind mount, where watcher events are not reliably delivered
+            if (!m_ShuttingDown
+                && Time.realtimeSinceStartup - m_LastShutdownCheck > 1f)
+            {
+                m_LastShutdownCheck = Time.realtimeSinceStartup;
+                try
+                {
+                    if (!string.IsNullOrEmpty(Config.ShutdownRequestFile)
+                        && File.Exists(ShutdownRequestPath))
+                    {
+                        m_ShuttingDown = true;
+                        StartCoroutine(ShutdownSequence());
+                        return;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    ServerLog("[AutoHost] Could not check for shutdown request\n" + ex);
+                }
+            }
+
+            if (m_ShuttingDown) return;
 
             if (Config.StatusIntervalSeconds > 0f
                 && Time.realtimeSinceStartup - m_LastStatus > Config.StatusIntervalSeconds)

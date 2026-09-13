@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
-# Headless SRMP host. Optionally pulls the game with steamcmd, patches SRML into
-# it, installs the SRMP mod, then runs the game with auto-hosting enabled on a
-# machine with no GPU and no display.
+# Headless SRMP host.
+#
+# Commands:
+#   serve   (default) install anything missing, then run the server
+#   login             one-time interactive Steam login (answers Steam Guard)
+#   code              print the current friend code and exit
+#   stop              ask a running server to save and quit
+#   shell             drop into a shell inside the runtime
 set -euo pipefail
 
 GAME_DIR="${GAME_DIR:-/game}"
@@ -28,6 +33,40 @@ GAME_PID=""
 
 log() { echo "[srmp-server] $*"; }
 die() { log "ERROR: $*"; exit 1; }
+
+usage() {
+  cat <<'TXT'
+SRMP headless server runtime.
+
+  docker run ... IMAGE [command]
+
+Commands:
+  serve    (default) install anything missing, then run the server
+  login    one-time interactive Steam login, needed once per Steam account
+  code     print the current friend code and exit
+  stop     ask a running server to save and quit
+  shell    drop into a shell inside the runtime
+
+Typical first run:
+
+  # 1. one-time Steam login (needs -it for the Steam Guard prompt)
+  docker run --rm -it \
+    -v "$PWD/steam:/steam" \
+    -e STEAM_USER=your_steam_name \
+    IMAGE login
+
+  # 2. start the server
+  docker run -d --name srmp-server \
+    -v "$PWD/game:/game" -v "$PWD/mods:/mods" -v "$PWD/steam:/steam" \
+    -v srmp-wine:/wine \
+    -e STEAM_USER=your_steam_name \
+    -e SRMP_USERNAME=Server \
+    IMAGE
+
+  # 3. read the friend code
+  docker exec srmp-server code
+TXT
+}
 
 # ---------------------------------------------------------------- display ---
 # Even in nographics mode Wine is happier with a display to talk to, and the
@@ -63,6 +102,46 @@ init_wine() {
   wineserver -w
 }
 
+# ------------------------------------------------------------------ login ---
+# Steam Guard cannot be answered by an unattended container, so this is run once
+# by hand. SteamCMD caches the sentry in /steam and later boots reuse it.
+run_login() {
+  mkdir -p /steam
+
+  if [[ ! -t 0 ]]; then
+    die "login needs an interactive terminal. Re-run with -it:
+  docker run --rm -it -v \"\$PWD/steam:/steam\" -e STEAM_USER=you IMAGE login"
+  fi
+
+  local user="${STEAM_USER}"
+  if [[ -z "${user}" ]]; then
+    read -r -p "Steam username: " user
+  fi
+
+  log "logging in as ${user}; enter your password and Steam Guard code when asked"
+  steamcmd +login "${user}" +quit
+
+  echo ""
+  log "login cached in the /steam volume; unattended runs will reuse it"
+  log "set STEAM_USER=${user} when you start the server"
+}
+
+# ------------------------------------------------------------------- code ---
+run_code() {
+  local path="${GAME_DIR}/SRMP/servercode.txt"
+  [[ -s "${path}" ]] || die "no friend code yet. Is the server finished starting?"
+  cat "${path}"
+}
+
+# ------------------------------------------------------------------- stop ---
+# Asks a running server to save and quit, from a second container/exec. The
+# running container's own entrypoint then sees the game exit and shuts down.
+run_stop() {
+  [[ -d "${GAME_DIR}/SRMP" ]] || die "no SRMP data at ${GAME_DIR}/SRMP — is this the right volume?"
+  : > "${GAME_DIR}/SRMP/shutdown.request"
+  log "shutdown requested; the server will save and quit shortly"
+}
+
 # --------------------------------------------------------------- steamcmd ---
 fetch_game() {
   local have_game="no"
@@ -77,7 +156,7 @@ fetch_game() {
 
   [[ -n "${STEAM_USER}" ]] || die "no game in ${GAME_DIR} and STEAM_USER is unset.
 Either mount an existing install at ${GAME_DIR}, or set STEAM_USER and run the
-one-time login first:  docker compose run --rm --entrypoint steam-login.sh srmp"
+one-time login first:  docker run --rm -it -v \"\$PWD/steam:/steam\" IMAGE login"
 
   mkdir -p "${GAME_DIR}"
   log "downloading app ${STEAM_APPID} (Windows depot) as ${STEAM_USER}"
@@ -91,7 +170,7 @@ one-time login first:  docker compose run --rm --entrypoint steam-login.sh srmp"
     +app_update "${STEAM_APPID}" validate \
     +quit \
     || die "steamcmd failed. If it asked for a Steam Guard code, run the one-time
-login first:  docker compose run --rm --entrypoint steam-login.sh srmp"
+login first:  docker run --rm -it -v \"\$PWD/steam:/steam\" IMAGE login"
 
   [[ -f "${GAME_DIR}/SlimeRancher.exe" ]] \
     || die "steamcmd finished but ${GAME_DIR}/SlimeRancher.exe is missing"
@@ -143,7 +222,7 @@ install_srmp() {
   elif [[ -f "${target}" ]]; then
     log "using SRMP.dll already present in SRML/Mods"
   else
-    die "no SRMP.dll found. Build it on Windows and put it in ${MODS_DIR}.
+    die "no SRMP.dll found. Build it on Windows and mount it at ${MODS_DIR}.
 Every client must run this exact same build."
   fi
 }
@@ -153,7 +232,7 @@ write_config() {
   local data="${GAME_DIR}/SRMP"
   mkdir -p "${data}"
 
-  # Rewritten every boot so the compose file stays the source of truth.
+  # Rewritten every boot so the container environment stays the source of truth.
   cat > "${data}/autohost.json" <<JSON
 {
   "Enabled": true,
@@ -171,94 +250,141 @@ write_config() {
 }
 JSON
   log "autohost config written to ${data}/autohost.json"
-  rm -f "${data}/servercode.txt"
+  # A request left over from a previous crash would quit the server on sight.
+  rm -f "${data}/servercode.txt" "${data}/shutdown.request"
 }
 
 # ---------------------------------------------------------------- shutdown ---
+# Unity will not flush a save in response to a signal, so stopping cleanly is a
+# handshake: ask the mod to save and quit, wait for the game to go away on its
+# own, and only force it down if it stops responding.
 shutdown() {
-  log "shutting down, asking the game to close cleanly..."
-  [[ -n "${GAME_PID}" ]] && kill -TERM "${GAME_PID}" 2>/dev/null || true
-  for _ in $(seq 1 30); do
-    [[ -n "${GAME_PID}" ]] && kill -0 "${GAME_PID}" 2>/dev/null || break
+  local grace="${SHUTDOWN_GRACE_SECONDS:-45}"
+
+  if [[ -z "${GAME_PID}" ]]; then
+    wineserver -k 2>/dev/null || true
+    [[ -n "${XVFB_PID}" ]] && kill "${XVFB_PID}" 2>/dev/null || true
+    exit 0
+  fi
+
+  log "stop requested: asking the server to save and quit (up to ${grace}s)"
+  mkdir -p "${GAME_DIR}/SRMP"
+  : > "${GAME_DIR}/SRMP/shutdown.request"
+
+  local waited=0
+  while kill -0 "${GAME_PID}" 2>/dev/null && (( waited < grace )); do
     sleep 1
+    waited=$((waited + 1))
   done
+
+  if kill -0 "${GAME_PID}" 2>/dev/null; then
+    log "WARNING: server did not quit within ${grace}s, terminating it"
+    log "WARNING: progress since the last autosave may be lost"
+    kill -TERM "${GAME_PID}" 2>/dev/null || true
+    sleep 5
+    kill -KILL "${GAME_PID}" 2>/dev/null || true
+  else
+    log "server saved and exited cleanly after ${waited}s"
+  fi
+
+  rm -f "${GAME_DIR}/SRMP/shutdown.request"
   wineserver -k 2>/dev/null || true
   [[ -n "${TAIL_PID}" ]] && kill "${TAIL_PID}" 2>/dev/null || true
   [[ -n "${XVFB_PID}" ]] && kill "${XVFB_PID}" 2>/dev/null || true
+  log "container stopping"
   exit 0
 }
 
-# -------------------------------------------------------------------- main ---
-start_xvfb
-init_wine
-fetch_game
-install_srml
-install_srmp
-write_config
+# ------------------------------------------------------------------ serve ---
+run_server() {
+  start_xvfb
+  init_wine
+  fetch_game
+  install_srml
+  install_srmp
+  write_config
 
-trap shutdown TERM INT
+  trap shutdown TERM INT
 
-RENDER_ARGS=()
-case "${RENDER_MODE}" in
-  nographics)
-    # Cheapest on a GPU-less VPS: Unity skips rendering entirely. Not every
-    # non-server build tolerates this, so fall back to software if it misbehaves.
-    log "render mode: nographics (no rendering at all)"
-    RENDER_ARGS=(-batchmode -nographics)
-    ;;
-  software)
-    log "render mode: software (llvmpipe on Xvfb)"
-    RENDER_ARGS=(-screen-width 640 -screen-height 480 -screen-fullscreen 0 -force-glcore)
-    ;;
-  *)
-    die "RENDER_MODE must be software or nographics (got '${RENDER_MODE}')"
-    ;;
-esac
+  local render_args=()
+  case "${RENDER_MODE}" in
+    nographics)
+      # Cheapest on a GPU-less VPS: Unity skips rendering entirely. Not every
+      # non-server build tolerates this, so fall back to software if it misbehaves.
+      log "render mode: nographics (no rendering at all)"
+      render_args=(-batchmode -nographics)
+      ;;
+    software)
+      log "render mode: software (llvmpipe on Xvfb)"
+      render_args=(-screen-width 640 -screen-height 480 -screen-fullscreen 0 -force-glcore)
+      ;;
+    *)
+      die "RENDER_MODE must be software or nographics (got '${RENDER_MODE}')"
+      ;;
+  esac
 
-cd "${GAME_DIR}"
-log "launching Slime Rancher headless as '${SRMP_USERNAME}'"
+  cd "${GAME_DIR}"
+  log "launching Slime Rancher headless as '${SRMP_USERNAME}'"
 
-wine SlimeRancher.exe \
-  -srmp-autohost \
-  -srmp-username "${SRMP_USERNAME}" \
-  -srmp-gamemode "${SRMP_GAMEMODE}" \
-  ${SRMP_GAME:+-srmp-game "${SRMP_GAME}"} \
-  "${RENDER_ARGS[@]}" &
-GAME_PID=$!
+  wine SlimeRancher.exe \
+    -srmp-autohost \
+    -srmp-username "${SRMP_USERNAME}" \
+    -srmp-gamemode "${SRMP_GAMEMODE}" \
+    ${SRMP_GAME:+-srmp-game "${SRMP_GAME}"} \
+    "${render_args[@]}" &
+  GAME_PID=$!
 
-# Surface the friend code as soon as the mod publishes it.
-(
-  for _ in $(seq 1 900); do
-    if [[ -s "${GAME_DIR}/SRMP/servercode.txt" ]]; then
-      printf '\n  ===================================\n'
-      printf '   FRIEND CODE: %s\n' "$(cat "${GAME_DIR}/SRMP/servercode.txt")"
-      printf '  ===================================\n\n'
-      exit 0
-    fi
+  # Surface the friend code as soon as the mod publishes it.
+  (
+    for _ in $(seq 1 900); do
+      if [[ -s "${GAME_DIR}/SRMP/servercode.txt" ]]; then
+        printf '\n  ===================================\n'
+        printf '   FRIEND CODE: %s\n' "$(cat "${GAME_DIR}/SRMP/servercode.txt")"
+        printf '  ===================================\n\n'
+        exit 0
+      fi
+      sleep 1
+    done
+    log "WARNING: no friend code after 15 minutes, check the log above"
+  ) &
+
+  # Follow the SRMP log so docker logs shows what the server is doing. The mod
+  # writes a fresh timestamped file per run, so wait for it and tail the newest.
+  local logfile=""
+  for _ in $(seq 1 180); do
+    logfile="$(ls -1t "${GAME_DIR}/SRMP/Logs"/log-*.txt 2>/dev/null | head -n1 || true)"
+    [[ -n "${logfile}" ]] && break
     sleep 1
   done
-  log "WARNING: no friend code after 15 minutes, check the log above"
-) &
+  if [[ -n "${logfile}" ]]; then
+    log "following ${logfile}"
+    tail -n +1 -F "${logfile}" &
+    TAIL_PID=$!
+  else
+    log "WARNING: no SRMP log in ${GAME_DIR}/SRMP/Logs — the mod may not have loaded"
+  fi
 
-# Follow the SRMP log so docker logs shows what the server is doing. The mod
-# writes a fresh timestamped file per run, so wait for it and tail the newest.
-LOGFILE=""
-for _ in $(seq 1 180); do
-  LOGFILE="$(ls -1t "${GAME_DIR}/SRMP/Logs"/log-*.txt 2>/dev/null | head -n1 || true)"
-  [[ -n "${LOGFILE}" ]] && break
-  sleep 1
-done
-if [[ -n "${LOGFILE}" ]]; then
-  log "following ${LOGFILE}"
-  tail -n +1 -F "${LOGFILE}" &
-  TAIL_PID=$!
-else
-  log "WARNING: no SRMP log in ${GAME_DIR}/SRMP/Logs — the mod may not have loaded"
-fi
+  local exit_code=0
+  wait "${GAME_PID}" || exit_code=$?
+  log "game exited with code ${exit_code}"
+  [[ -n "${TAIL_PID}" ]] && kill "${TAIL_PID}" 2>/dev/null || true
+  [[ -n "${XVFB_PID}" ]] && kill "${XVFB_PID}" 2>/dev/null || true
+  exit "${exit_code}"
+}
 
-EXIT_CODE=0
-wait "${GAME_PID}" || EXIT_CODE=$?
-log "game exited with code ${EXIT_CODE}"
-[[ -n "${TAIL_PID}" ]] && kill "${TAIL_PID}" 2>/dev/null || true
-[[ -n "${XVFB_PID}" ]] && kill "${XVFB_PID}" 2>/dev/null || true
-exit "${EXIT_CODE}"
+# ------------------------------------------------------------------- main ---
+COMMAND="${1:-serve}"
+shift || true
+
+case "${COMMAND}" in
+  serve)          run_server ;;
+  login)          run_login ;;
+  code)           run_code ;;
+  stop)           run_stop ;;
+  shell|bash)     exec bash "$@" ;;
+  help|--help|-h) usage ;;
+  *)
+    # Anything else is run verbatim, so `docker run IMAGE steamcmd +quit` works.
+    exec "${COMMAND}" "$@"
+    ;;
+esac

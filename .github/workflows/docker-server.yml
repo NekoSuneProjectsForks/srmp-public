@@ -41,7 +41,7 @@ jobs:
       - name: Check shell syntax
         run: |
           set -euo pipefail
-          for script in server/entrypoint.sh server/steam-login.sh; do
+          for script in server/entrypoint.sh; do
             if [ ! -f "$script" ]; then
               echo "Missing required script: $script" >&2
               exit 1
@@ -62,11 +62,9 @@ jobs:
 
           # Warnings are surfaced for review but do not fail the build; only
           # genuine errors block publishing.
-          shellcheck --severity=warning $EXCLUDE \
-            server/entrypoint.sh server/steam-login.sh || true
+          shellcheck --severity=warning $EXCLUDE server/entrypoint.sh || true
 
-          shellcheck --severity=error $EXCLUDE \
-            server/entrypoint.sh server/steam-login.sh
+          shellcheck --severity=error $EXCLUDE server/entrypoint.sh
 
       - name: Verify the image ships no game content
         run: |

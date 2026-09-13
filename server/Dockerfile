@@ -58,8 +58,8 @@ ENV LIBGL_ALWAYS_SOFTWARE=1 \
     STEAM_APPID=433340 \
     DISPLAY_NUM=99
 
-COPY entrypoint.sh steam-login.sh /usr/local/bin/
-RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/steam-login.sh
+COPY entrypoint.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/entrypoint.sh
 
 VOLUME ["/game", "/wine", "/steam"]
 
@@ -67,4 +67,7 @@ LABEL org.opencontainers.image.title="SRMP headless server runtime" \
       org.opencontainers.image.description="Wine + Xvfb runtime for hosting Slime Rancher Multiplayer headless. Contains no game content." \
       org.opencontainers.image.licenses="MIT"
 
+# The entrypoint dispatches on its first argument: serve (default), login,
+# code, stop or shell. See `docker run IMAGE help`.
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint.sh"]
+CMD ["serve"]
