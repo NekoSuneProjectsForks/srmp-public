@@ -9,12 +9,55 @@ Linux.
 
 ## What you need
 
-- Windows with Slime Rancher installed (Steam or Epic)
+- Windows, with a copy of Slime Rancher for the server to run
 - **SRML installed** into that copy, and **`SRMP.dll` in `SRML\Mods`**
 - The same `SRMP.dll` given to everyone who will join
 
 The script refuses to start if SRML or the mod is missing, rather than launching
 a game that quietly is not a server.
+
+## Building a standalone server copy
+
+`Get-SRMPServerFiles.ps1` produces a server folder that **runs without the Steam
+client**. The host machine never holds a Steam session, so nobody is signed out
+of Steam elsewhere because the server is running, and your friend can play on
+another PC normally.
+
+Two things to be clear about first:
+
+- **SteamCMD still needs an account that owns the game** in order to download it.
+  This removes the need to *run* Steam on the server, not the need to own the
+  game. That login happens once, at download time.
+- **If you already have the game installed, you do not need SteamCMD at all.**
+  Copying that folder involves no Steam account on the server whatsoever, and is
+  the simpler route.
+
+### Copy from an install you already have (simplest)
+
+```powershell
+.\Get-SRMPServerFiles.ps1 -InstallPath C:\srmp-server `
+  -FromExisting "E:\SteamLibrary\steamapps\common\Slime Rancher"
+```
+
+### Or download with SteamCMD
+
+```powershell
+.\Get-SRMPServerFiles.ps1 -InstallPath C:\srmp-server -SteamUser myaccount
+```
+
+SteamCMD is downloaded automatically. Steam Guard prompts on the first run only;
+SteamCMD caches the result and the server keeps no Steam session afterwards.
+
+Either way the script then installs SRML, installs `SRMP.dll` (taken from
+`Builds\SRMP\SRMP.dll` unless you pass `-SrmpDll`), and prints the command to
+start the server:
+
+```powershell
+.\Start-SRMPServer.ps1 -GamePath "C:\srmp-server"
+```
+
+Because this copy is separate from the one you play on, the auto-host config it
+writes never affects your own game.
 
 ## Start it
 
@@ -51,7 +94,8 @@ restart** — it is generated per lobby, not stored.
 > **Use a separate copy of the game for the server.** Starting the server writes
 > `Enabled: true` into `<game>\SRMP\autohost.json`, and that install will then
 > auto-host whenever you launch it normally. Set `Enabled` back to `false` if you
-> want to play on that copy again.
+> want to play on that copy again. `Get-SRMPServerFiles.ps1` builds exactly such
+> a separate copy.
 
 ## Stop it
 
