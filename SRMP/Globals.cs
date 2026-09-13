@@ -30,6 +30,12 @@ namespace SRMultiplayer
         /// </summary>
         public static int MaxPlayers = 16;
 
+        /// <summary>
+        /// Frame rate reported by the host. Shown next to the host in the player
+        /// list because it, not the network, sets the floor on everyone's ping.
+        /// </summary>
+        public static int HostFps;
+
         public static string ServerCode
         {
             get

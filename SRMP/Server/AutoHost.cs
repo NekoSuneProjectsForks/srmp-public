@@ -25,12 +25,10 @@ namespace SRMultiplayer.Server
         public bool IsHosting { get; private set; }
 
         /// <summary>
-        /// True once the host character has been tucked away. Gates the
-        /// invulnerability patch so a normal client host is never affected.
+        /// True while the host character should be unkillable. Gates the god mode
+        /// patches so a normal client host is never affected.
         /// </summary>
-        public bool IsParked { get; private set; }
-
-        private Vector3 m_ParkPosition;
+        public bool IsGodMode { get; private set; }
 
         private float m_LastStatus;
         private float m_LastSave;
@@ -55,6 +53,15 @@ namespace SRMultiplayer.Server
             //EOS fixes lobby size at creation, so this must be set before hosting
             Globals.MaxPlayers = Mathf.Clamp(Config.MaxPlayers, 2, 64);
 
+            ServerCommands.Operators.Clear();
+            if (Config.Operators != null)
+            {
+                foreach (var op in Config.Operators)
+                {
+                    if (!string.IsNullOrEmpty(op)) ServerCommands.Operators.Add(op.Trim());
+                }
+            }
+
             ServerLog("=====================================");
             ServerLog(" SRMP headless host starting");
             ServerLog(" username : " + Config.Username);
@@ -62,8 +69,23 @@ namespace SRMultiplayer.Server
                 ? (Config.LoadLatestSave ? "<most recent>" : "<new game>")
                 : Config.GameName));
             ServerLog(" slots    : " + Globals.MaxPlayers);
+            ServerLog(" operators: " + (ServerCommands.Operators.Count == 0
+                ? "<none - /tp unavailable>"
+                : string.Join(", ", ServerCommands.Operators.ToArray())));
             ServerLog(" config   : " + AutoHostConfig.ConfigPath);
             ServerLog("=====================================");
+        }
+
+        /// <summary>
+        /// Frees the game loop to run at the configured rate. A headless server
+        /// has no display to synchronise to, and every frame it waits is added to
+        /// every connected player's round trip, because incoming packets are only
+        /// drained once per frame.
+        /// </summary>
+        private void ApplyFrameRate()
+        {
+            QualitySettings.vSyncCount = 0;
+            Application.targetFrameRate = Config.TargetFrameRate > 0 ? Config.TargetFrameRate : -1;
         }
 
         private void Start()
@@ -122,7 +144,21 @@ namespace SRMultiplayer.Server
             }
 
             IsHosting = true;
-            ParkHostPlayer();
+
+            ApplyFrameRate();
+            ServerLog("[AutoHost] Target frame rate: "
+                      + (Config.TargetFrameRate > 0 ? Config.TargetFrameRate.ToString() : "uncapped")
+                      + ", vsync off");
+
+            //the host stays where the save put it. Moving it underground looked
+            //tidy but sat inside a kill volume, and the resulting death/respawn
+            //loop clobbered the server every frame.
+            if (Config.GodMode)
+            {
+                IsGodMode = true;
+                ServerLog("[AutoHost] Host character is in god mode");
+            }
+
             PublishServerCode();
         }
 
@@ -304,72 +340,6 @@ namespace SRMultiplayer.Server
             result(false);
         }
 
-        /// <summary>
-        /// Drops the host character straight down, out of sight. Straight down
-        /// rather than far away on purpose: the host keeps the same horizontal
-        /// position, so it stays inside the same streaming region and carries on
-        /// loading and arbitrating the ranch.
-        /// </summary>
-        private void ParkHostPlayer()
-        {
-            if (!Config.HidePlayer) return;
-
-            try
-            {
-                var player = SRSingleton<SceneContext>.Instance.Player;
-                if (player == null)
-                {
-                    ServerLog("[AutoHost] No player to park");
-                    return;
-                }
-
-                m_ParkPosition = player.transform.position + Vector3.down * Mathf.Abs(Config.ParkDepth);
-                player.transform.position = m_ParkPosition;
-                IsParked = true;
-
-                ServerLog($"[AutoHost] Host character parked {Config.ParkDepth}m below the surface "
-                          + "and made invulnerable");
-            }
-            catch (Exception ex)
-            {
-                ServerLog("[AutoHost] Could not park the host character\n" + ex);
-            }
-        }
-
-        /// <summary>
-        /// Holds the host in place. Without this it falls, drifts or gets pushed,
-        /// and the server player wanders off into the world it is supposed to be
-        /// hidden from.
-        /// </summary>
-        private void HoldHostParked()
-        {
-            if (!IsParked) return;
-
-            try
-            {
-                var player = SRSingleton<SceneContext>.Instance.Player;
-                if (player == null) return;
-
-                if (player.transform.position != m_ParkPosition)
-                {
-                    player.transform.position = m_ParkPosition;
-                }
-
-                //nothing should be able to kill it, but a world that finds a way
-                //would take the whole server down with it
-                var state = SRSingleton<SceneContext>.Instance.PlayerState;
-                if (state != null)
-                {
-                    if (state.GetCurrHealth() < state.GetMaxHealth()) state.SetHealth(state.GetMaxHealth());
-                    if (state.GetCurrEnergy() < state.GetMaxEnergy()) state.SetEnergy(state.GetMaxEnergy());
-                }
-            }
-            catch
-            {
-                //a transient null during a scene change is not worth logging every frame
-            }
-        }
-
         /// <summary>Writes the friend code to stdout, the log and a file operators can read.</summary>
         private void PublishServerCode()
         {
@@ -468,8 +438,6 @@ namespace SRMultiplayer.Server
         {
             if (!IsHosting) return;
 
-            HoldHostParked();
-
             //poll rather than use a FileSystemWatcher: this has to work across a
             //bind mount, where watcher events are not reliably delivered
             if (!m_ShuttingDown
@@ -502,8 +470,20 @@ namespace SRMultiplayer.Server
                     .Where(p => p != null && p.ID != Globals.LocalID)
                     .Select(p => p.Username)
                     .ToList();
-                ServerLog($"[AutoHost] code {Globals.ServerCode} | {names.Count} player(s) online"
+                //the game reapplies its own quality settings at various points,
+                //so this is re-asserted rather than set once
+                ApplyFrameRate();
+
+                ServerLog($"[AutoHost] code {Globals.ServerCode} | {SRMP.MeasuredFps} fps | "
+                          + $"{names.Count} player(s) online"
                           + (names.Count > 0 ? ": " + string.Join(", ", names.ToArray()) : ""));
+
+                if (SRMP.MeasuredFps > 0 && SRMP.MeasuredFps < 20)
+                {
+                    ServerLog("[AutoHost] WARNING: the server loop is slow. Every player's ping and "
+                              + "world sync is limited by this, because packets are only handled once "
+                              + "per frame. Give the container more CPU.");
+                }
             }
 
             if (Config.AutoSaveIntervalSeconds > 0f

@@ -333,6 +333,19 @@ namespace SRMultiplayer.Networking
         {
             if (Globals.EpicToPlayer.TryGetValue(remoteUserId, out var player))
             {
+                ReclaimPlayerOwnership(player);
+
+                if (Globals.Players.TryGetValue(player, out var leaving) && leaving != null)
+                {
+                    //the object outlives the dictionary entry otherwise, and stale
+                    //entries linger in every region's player list
+                    foreach (var region in leaving.Regions.ToList())
+                    {
+                        region.RemovePlayer(leaving);
+                    }
+                    UnityEngine.Object.Destroy(leaving.gameObject);
+                }
+
                 Globals.Players.Remove(player);
                 Globals.EpicToPlayer.Remove(remoteUserId);
                 Globals.PlayerToEpic.Remove(player);
@@ -341,6 +354,50 @@ namespace SRMultiplayer.Networking
                 {
                     ID = player
                 }.SendToAll();
+            }
+        }
+
+        /// <summary>
+        /// Hands everything a departing player was simulating back to the host.
+        /// Left alone these actors and regions stay owned by a player id that no
+        /// longer exists, so nobody simulates them and nobody can claim them.
+        /// </summary>
+        private void ReclaimPlayerOwnership(byte leavingId)
+        {
+            int actors = 0;
+            foreach (var actor in Globals.Actors.Values.ToList())
+            {
+                if (actor == null || actor.Owner != leavingId) continue;
+
+                actor.Owner = Globals.LocalID;
+                actors++;
+
+                new PacketActorOwner()
+                {
+                    ID = actor.ID,
+                    Owner = Globals.LocalID
+                }.SendToAll(NetDeliveryMethod.ReliableOrdered);
+            }
+
+            int regions = 0;
+            foreach (var region in Globals.Regions.Values.ToList())
+            {
+                if (region == null || region.Owner != leavingId) continue;
+
+                region.SetOwnership(Globals.LocalID);
+                regions++;
+
+                new PacketRegionOwner()
+                {
+                    ID = region.ID,
+                    Owner = Globals.LocalID
+                }.SendToAll(NetDeliveryMethod.ReliableOrdered);
+            }
+
+            if (actors > 0 || regions > 0)
+            {
+                SRMP.Log($"[Server] Reclaimed {actors} actor(s) and {regions} region(s) "
+                         + $"from departing player {leavingId}");
             }
         }
 

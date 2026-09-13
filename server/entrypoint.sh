@@ -27,8 +27,9 @@ SRMP_GAMEMODE="${SRMP_GAMEMODE:-CLASSIC}"
 SRMP_SLOTS="${SRMP_SLOTS:-16}"
 SRMP_LOAD_LATEST="${SRMP_LOAD_LATEST:-true}"
 SAVES_DIR="${SAVES_DIR:-/saves}"
-SRMP_HIDE_PLAYER="${SRMP_HIDE_PLAYER:-true}"
-SRMP_PARK_DEPTH="${SRMP_PARK_DEPTH:-40}"
+SRMP_GOD_MODE="${SRMP_GOD_MODE:-true}"
+SRMP_TICK_RATE="${SRMP_TICK_RATE:-60}"
+SRMP_OPERATORS="${SRMP_OPERATORS:-}"
 
 export WINEPREFIX="${WINEPREFIX:-/wine}"
 export DISPLAY=":${DISPLAY_NUM}"
@@ -467,6 +468,13 @@ write_config() {
   local data="${GAME_DIR}/SRMP"
   mkdir -p "${data}"
 
+  # Operators arrive as a comma separated list; the config wants a JSON array.
+  local SRMP_OPERATORS_JSON=""
+  if [[ -n "${SRMP_OPERATORS}" ]]; then
+    SRMP_OPERATORS_JSON="$(echo "${SRMP_OPERATORS}"       | tr ',' '
+'       | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'       | grep -v '^$'       | sed 's/.*/"&"/'       | paste -sd, -)"
+  fi
+
   # Rewritten every boot so the container environment stays the source of truth.
   cat > "${data}/autohost.json" <<JSON
 {
@@ -477,8 +485,9 @@ write_config() {
   "GameMode": "${SRMP_GAMEMODE}",
   "CreateGameIfMissing": true,
   "LoadLatestSave": ${SRMP_LOAD_LATEST},
-  "HidePlayer": ${SRMP_HIDE_PLAYER},
-  "ParkDepth": ${SRMP_PARK_DEPTH},
+  "GodMode": ${SRMP_GOD_MODE},
+  "TargetFrameRate": ${SRMP_TICK_RATE},
+  "Operators": [${SRMP_OPERATORS_JSON}],
   "MaxPlayers": ${SRMP_SLOTS},
   "StartupDelaySeconds": 5.0,
   "LoginTimeoutSeconds": 90.0,

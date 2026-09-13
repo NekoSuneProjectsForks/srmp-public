@@ -1535,6 +1535,16 @@ namespace SRMultiplayer.Networking
         {
             if (Globals.Actors.TryGetValue(packet.ID, out NetworkActor netActor))
             {
+                //Never take a client's word for destroying something it does not
+                //own. A disconnecting or misbehaving client would otherwise be
+                //able to delete the whole world out from under everyone.
+                if (netActor.Owner != 0 && netActor.Owner != player.ID)
+                {
+                    SRMP.Log($"[Server] {player.Username} tried to destroy actor {packet.ID} "
+                             + $"owned by {netActor.Owner}; ignored");
+                    return;
+                }
+
                 netActor.OnDestroyEffect();
                 Destroyer.DestroyActor(netActor.gameObject, "NetworkHandlerServer.OnActorDestroy");
 
@@ -1597,6 +1607,9 @@ namespace SRMultiplayer.Networking
 
         private static void OnPlayerChat(PacketPlayerChat packet, NetworkPlayer player)
         {
+            //commands are answered privately and never relayed to the lobby
+            if (Server.ServerCommands.TryHandle(packet.message, player)) return;
+
             packet.message = player.Username + ": " + packet.message;
             packet.SendToAll();
 

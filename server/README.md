@@ -169,6 +169,29 @@ InitializeEngineGraphics failed
 If `nographics` misbehaves, switch to `software` — it keeps the D3D11 path the
 game actually ships shaders for.
 
+## In-game chat commands
+
+Chat works between everyone in the lobby, including when the host is this
+container. Lines starting with `/` are handled by the server and answered
+privately rather than broadcast.
+
+| Command | Who | What |
+| --- | --- | --- |
+| `/help` | anyone | Lists the commands available to you. |
+| `/tps` | anyone | Server tick rate and player count. |
+| `/ping` | anyone | Your own round trip time. |
+| `/list` | anyone | Everyone online with their pings. |
+| `/home` | anyone | Teleport yourself back to the ranch. |
+| `/tp <player> [dest]` | operator | One argument moves you to that player; two moves the first to the second. `home` is a valid destination. |
+
+Operators are set with `SRMP_OPERATORS` (comma separated in-game names). On a
+headless server nobody is sitting at the host, so **if you leave it empty no one
+can use `/tp`**. A normal client host is always an operator on their own game.
+
+```yaml
+SRMP_OPERATORS: "NekoSuneVR,FumikoEcho"
+```
+
 ## Sizing the server
 
 **First, a correction worth knowing:** Docker applies **no memory limit** unless
@@ -208,6 +231,34 @@ Set `mem_limit` comfortably above real usage. A limit that is too low does not
 degrade gracefully — the container gets OOM-killed and the world reverts to the
 last autosave.
 
+### Ping is the host's tick rate, not the network
+
+Incoming packets are drained **once per frame**, inside the game's `Update`.
+So no player's round trip can be faster than the host's frame time, and a host
+running at 5 fps gives everyone a 400 ms floor before a single byte crosses the
+network. This is why a headless server can show multi-second pings on a LAN
+while the same world hosted from a desktop client feels fine.
+
+The multiplayer menu shows **Server tick rate** for exactly this reason, and the
+server logs it every heartbeat:
+
+```
+[AutoHost] code A7K2M9Q | 58 fps | 2 player(s) online: Alice, Bob
+```
+
+Read it like this:
+
+| Tick rate | Meaning |
+| --- | --- |
+| 45+ fps | Healthy. A high ping here is genuinely the network. |
+| 20-45 fps | Usable, some sync lag. |
+| under 20 fps | This is your problem. Ping and desync both follow from it. |
+
+`SRMP_TICK_RATE` sets the target (default 60) and vsync is always disabled —
+waiting on a display the server does not have is pure added latency. Raising the
+target only helps if the CPU can keep up; if the measured rate sits well below
+the target, the container needs more CPU, not a higher target.
+
 ### If players are desyncing, suspect CPU before RAM
 
 Remote player positions are sent from the game's `Update` loop, so **the host's
@@ -244,8 +295,9 @@ missing.
 | `SRMP_GAMEMODE` | `CLASSIC`, `CASUAL`, `TIME_LIMIT` or `TIME_LIMIT_V2`. |
 | `SRMP_SLOTS` | Lobby capacity including the host (2-64). Default 16. |
 | `SRMP_LOAD_LATEST` | With `SRMP_GAME` blank, continue the newest world instead of creating one. Default true. |
-| `SRMP_HIDE_PLAYER` | Park the host character underground and make it invulnerable. Default true. |
-| `SRMP_PARK_DEPTH` | How far below its start point the host is parked, in metres. Default 40. |
+| `SRMP_GOD_MODE` | Make the host character unkillable. Default true. |
+| `SRMP_TICK_RATE` | Server loop rate in fps. Caps everyone's ping. Default 60, 0 = uncapped. |
+| `SRMP_OPERATORS` | Comma separated names allowed to use `/tp`. Empty means nobody. |
 | `SRMP_STATUS_INTERVAL` | Seconds between "N players online" lines. `0` disables. |
 | `SRMP_AUTOSAVE_INTERVAL` | Seconds between forced saves. `0` disables. |
 | `SRML_URL` | Where to fetch `SRMLInstaller.exe`. Override if the default 404s. |

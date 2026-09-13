@@ -52,6 +52,31 @@ namespace SRMultiplayer
         /// </summary>
         private const float ServerTimeoutSeconds = 20f;
 
+        /// <summary>
+        /// Smoothed local frame rate. On the host this is the tick rate of the
+        /// whole session: packets are only drained once per frame, so nobody's
+        /// round trip can beat the host's frame time.
+        /// </summary>
+        public static int MeasuredFps { get; private set; }
+
+        private static float m_FpsAccumulator;
+        private static int m_FpsFrames;
+
+        private static void SampleFps()
+        {
+            m_FpsAccumulator += Time.unscaledDeltaTime;
+            m_FpsFrames++;
+
+            if (m_FpsAccumulator >= 1f)
+            {
+                MeasuredFps = Mathf.RoundToInt(m_FpsFrames / m_FpsAccumulator);
+                m_FpsAccumulator = 0f;
+                m_FpsFrames = 0;
+
+                if (Globals.IsServer) Globals.HostFps = MeasuredFps;
+            }
+        }
+
         /// <summary>Marks the server as alive right now.</summary>
         public static void NoteServerContact()
         {
@@ -78,6 +103,17 @@ namespace SRMultiplayer
 
             Globals.GameLoaded = false;
             Globals.ClientLoaded = false;
+
+            //without this the EOS lobby handle survives a crashed host and every
+            //later join or host attempt is refused as "already in a lobby"
+            try
+            {
+                EpicApplication.Instance?.Lobby?.ForceReset(reason);
+            }
+            catch (Exception ex)
+            {
+                Log($"[SRMP] Error resetting lobby state: {ex}");
+            }
 
             //scene 2 is the main menu; scene 3 is the loaded world
             if (SceneManager.GetActiveScene().buildIndex == 3)
@@ -180,6 +216,8 @@ namespace SRMultiplayer
         /// </summary>
         private void Update()
         {
+            SampleFps();
+
             if(Globals.GameLoaded)
             {
                 if (Globals.IsClient)
@@ -226,7 +264,11 @@ namespace SRMultiplayer
                                 Ping = (ushort)Mathf.Clamp(p.Ping, 0, ushort.MaxValue)
                             });
                         }
-                        new PacketPlayerPings() { Pings = pings }.SendToAll();
+                        new PacketPlayerPings()
+                        {
+                            Pings = pings,
+                            HostFps = (ushort)Mathf.Clamp(MeasuredFps, 0, ushort.MaxValue)
+                        }.SendToAll();
                     }
 
                     //every 30 seconds  send a time updater out to all clients 
@@ -313,6 +355,21 @@ namespace SRMultiplayer
             }
             Globals.Players.Clear();
 
+            //these two outlived the session and made a returning player look like
+            //they were still connected
+            Globals.EpicToPlayer.Clear();
+            Globals.PlayerToEpic.Clear();
+
+            //a lobby handle left over from a crashed session blocks the next
+            //join or host attempt entirely
+            try
+            {
+                EpicApplication.Instance?.Lobby?.ForceReset("returned to the main menu");
+            }
+            catch (Exception ex)
+            {
+                Log($"[SRMP] Error resetting lobby state: {ex}");
+            }
 
             //reset the chat 
             ChatUI.Instance.Clear();

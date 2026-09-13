@@ -16,6 +16,13 @@ namespace SRMultiplayer.Packets
             public ushort Ping;
         }
 
+        /// <summary>
+        /// The host's current frame rate. A client's round trip cannot be faster
+        /// than the host's frame time, because packets are only drained once per
+        /// frame - so this is the number that explains a bad ping.
+        /// </summary>
+        public ushort HostFps;
+
         //a property, not a field, so the base field serializer skips it and
         //leaves the list to the custom pass below
         public List<PingData> Pings { get; set; }

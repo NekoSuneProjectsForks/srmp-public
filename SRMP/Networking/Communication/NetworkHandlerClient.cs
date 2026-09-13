@@ -1360,6 +1360,8 @@ namespace SRMultiplayer.Networking
 
         private static void OnPlayerPings(PacketPlayerPings packet)
         {
+            Globals.HostFps = packet.HostFps;
+
             foreach (var entry in packet.Pings)
             {
                 if (Globals.Players.TryGetValue(entry.ID, out var player) && player != null)

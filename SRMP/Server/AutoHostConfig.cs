@@ -1,5 +1,6 @@
 using Newtonsoft.Json;
 using System;
+using System.Collections.Generic;
 using System.IO;
 
 namespace SRMultiplayer.Server
@@ -48,19 +49,28 @@ namespace SRMultiplayer.Server
         public int MaxPlayers = 16;
 
         /// <summary>
-        /// Park the host character out of sight once the lobby is open. An
-        /// unattended server still needs a player in the world to be the host,
-        /// but nobody wants to see it standing on the ranch forever. Only applies
-        /// to auto-hosting; someone hosting from their own client is unaffected.
+        /// Make the host character unkillable. An unattended server has nobody to
+        /// respond to a death, and every death fades the screen, clears carried
+        /// ammo and teleports the host back to the ranch. Only applies to
+        /// auto-hosting; someone hosting from their own client is unaffected.
         /// </summary>
-        public bool HidePlayer = true;
+        public bool GodMode = true;
 
         /// <summary>
-        /// How far below its starting point the host is parked, in metres. Kept
-        /// directly underneath so it stays inside the same streaming region and
-        /// the host does not stop loading the ranch.
+        /// Frames per second the server aims for. This is the tick rate of the
+        /// whole session, not a graphics setting: packets are only drained once
+        /// per frame, so a slow loop shows up as everyone's ping and as world
+        /// desync. 0 means uncapped. Vertical sync is always disabled, since
+        /// waiting on a display the server does not have is pure latency.
         /// </summary>
-        public float ParkDepth = 40f;
+        public int TargetFrameRate = 60;
+
+        /// <summary>
+        /// Usernames allowed to run privileged chat commands such as /tp. A
+        /// headless server has nobody sitting at it, so without this nobody can
+        /// use them at all.
+        /// </summary>
+        public List<string> Operators = new List<string>();
 
         /// <summary>Seconds to wait at the main menu before touching anything.</summary>
         public float StartupDelaySeconds = 3f;

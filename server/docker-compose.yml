@@ -51,11 +51,18 @@ services:
       # player is more packet traffic and more actor ownership for one machine
       # to arbitrate. See "Sizing the server" in the README.
       SRMP_SLOTS: "16"
-      # Hide the host character. A server still needs a player in the world to be
-      # the host, so it is parked underground and made invulnerable rather than
-      # left standing on the ranch. Only affects auto-hosting.
-      SRMP_HIDE_PLAYER: "true"
-      SRMP_PARK_DEPTH: "40"
+      # The host character stays at spawn but cannot be killed. Only affects
+      # auto-hosting; someone hosting from their own client is untouched.
+      SRMP_GOD_MODE: "true"
+      # Server tick rate. This is NOT a graphics setting: incoming packets are
+      # only drained once per frame, so this caps every player's ping and how
+      # fresh the world they see is. Raise it if the box has CPU to spare;
+      # 0 means uncapped.
+      SRMP_TICK_RATE: "60"
+      # Who may use privileged chat commands like /tp. Comma separated in-game
+      # names. A headless server has nobody at the keyboard, so without this
+      # nobody can use them at all.
+      SRMP_OPERATORS: ""
       SRMP_STATUS_INTERVAL: "60"
       SRMP_AUTOSAVE_INTERVAL: "300"
       # How long to let the game save and quit before it is forced down.

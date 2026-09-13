@@ -1,3 +1,4 @@
+using System.Linq;
 using UnityEngine;
 using System.Collections;
 using System;
@@ -63,6 +64,45 @@ public class ChatUI : SRSingleton<ChatUI>
     /// <summary>
     /// Create the chat GUI.
     /// </summary>
+    /// <summary>
+    /// Commands offered while typing. Kept here rather than asked of the server
+    /// so the list appears the instant '/' is typed, with no round trip.
+    /// </summary>
+    private static readonly string[] CommandHints =
+    {
+        "/help - list commands",
+        "/tps - server tick rate",
+        "/ping - your round trip time",
+        "/list - who is online",
+        "/home - teleport yourself to the ranch",
+        "/tp <player> [dest|home] - operators only"
+    };
+
+    /// <summary>
+    /// Shows matching commands as soon as the line starts with '/', so the
+    /// commands are discoverable without knowing /help exists first.
+    /// </summary>
+    private static void DrawCommandHints(string current)
+    {
+        if (string.IsNullOrEmpty(current) || !current.StartsWith("/")) return;
+
+        //match on the word typed so far, so the list narrows as you go
+        string typed = current.Split(' ')[0];
+        var matches = CommandHints
+            .Where(h => h.StartsWith(typed, System.StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (matches.Count == 0) return;
+
+        var previous = GUI.contentColor;
+        GUI.contentColor = new Color(0.7f, 0.85f, 1f);
+        foreach (var hint in matches)
+        {
+            GUILayout.Label(hint);
+        }
+        GUI.contentColor = previous;
+    }
+
     private void OnGUI()
     {
         if (!Globals.IsMultiplayer)
@@ -86,6 +126,8 @@ public class ChatUI : SRSingleton<ChatUI>
                     GUILayout.Label(WrapString(msg.Text, maxWidth), skin, GUILayout.MaxWidth(maxWidth));
                 }
                 GUILayout.EndScrollView();
+
+                DrawCommandHints(message);
 
                 GUI.SetNextControlName("ChatInput");
                 message = GUILayout.TextField(message ?? "");

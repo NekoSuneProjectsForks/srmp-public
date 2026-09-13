@@ -320,6 +320,8 @@ public class MultiplayerUI : SRSingleton<MultiplayerUI>
 
         if (player.IsLocal && Globals.IsServer)
         {
+            //a host has no round trip to itself; its frame rate is the useful
+            //number, since it caps how fast anyone else can be served
             GUI.contentColor = Color.grey;
             GUILayout.Label("host", GUILayout.Width(60));
         }
@@ -341,6 +343,29 @@ public class MultiplayerUI : SRSingleton<MultiplayerUI>
     }
 
     /// <summary>
+    /// Shows how fast the host's game loop is running. Incoming packets are only
+    /// drained once per frame, so this sets the floor on every player's ping and
+    /// on how fresh the world they see is. A high ping on a local network almost
+    /// always means this number is low, not that the network is slow.
+    /// </summary>
+    private static void HostTickRateLabel()
+    {
+        int fps = Globals.IsServer ? SRMP.MeasuredFps : Globals.HostFps;
+        if (fps <= 0) return;
+
+        var previous = GUI.contentColor;
+
+        if (fps >= 45) GUI.contentColor = Color.green;
+        else if (fps >= 20) GUI.contentColor = Color.yellow;
+        else GUI.contentColor = new Color(1f, 0.4f, 0.4f);
+
+        GUILayout.Label($"Server tick rate: {fps} fps"
+                        + (fps < 20 ? "  (too slow - this is what your ping is waiting on)" : ""));
+
+        GUI.contentColor = previous;
+    }
+
+    /// <summary>
     /// Display the active server info part of the gui
     /// </summary>
     private void ServerGUI()
@@ -356,6 +381,8 @@ public class MultiplayerUI : SRSingleton<MultiplayerUI>
         }
         GUILayout.EndHorizontal();
         
+        HostTickRateLabel();
+
         GUILayout.Label("Players");
         playersScroll = GUILayout.BeginScrollView(playersScroll, GUI.skin.box);
         foreach (var player in Globals.Players.Values)
@@ -385,6 +412,8 @@ public class MultiplayerUI : SRSingleton<MultiplayerUI>
     {
         GUILayout.Label("You are a client");
         GUILayout.Space(20);
+
+        HostTickRateLabel();
 
         GUILayout.Label("Players");
         playersScroll = GUILayout.BeginScrollView(playersScroll, GUI.skin.box);
