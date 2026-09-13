@@ -30,6 +30,12 @@ namespace SRMultiplayer.Networking
         public bool HasLoaded;
 
         public bool IsVR;
+
+        /// <summary>
+        /// Measured round trip time in milliseconds. Only the client can measure
+        /// its own, so remote values arrive from the server via PacketPlayerPings.
+        /// </summary>
+        public int Ping;
         
         public RegionRegistry.RegionSetId CurrentRegionSet
         {

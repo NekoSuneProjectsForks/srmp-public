@@ -1,4 +1,5 @@
-﻿using MonomiPark.SlimeRancher.Persist;
+﻿using Lidgren.Network;
+using MonomiPark.SlimeRancher.Persist;
 using MonomiPark.SlimeRancher.Regions;
 using SRMultiplayer.Networking;
 using SRMultiplayer.Packets;
@@ -24,6 +25,41 @@ namespace SRMultiplayer
         public static string ModDataPath { get { return Path.Combine(Application.dataPath, "..", "SRMP"); } }
 
         private float m_LastTimeSync;
+        private float m_LastPing;
+        private float m_LastPingBroadcast;
+
+        /// <summary>How often each client pings the server, in seconds.</summary>
+        private const float PingInterval = 2f;
+
+        /// <summary>How often the server publishes everyone's ping, in seconds.</summary>
+        private const float PingBroadcastInterval = 3f;
+
+        /// <summary>
+        /// Smoothed round trip time in milliseconds. A single sample jitters
+        /// enough to be unreadable in a UI, so samples are blended.
+        /// </summary>
+        public static int SmoothedPing { get; private set; }
+
+        /// <summary>
+        /// Folds one RTT sample into the smoothed value and publishes it on the
+        /// local player so the lobby list and the server both see the same number.
+        /// </summary>
+        public static void RecordPingSample(float rttSeconds)
+        {
+            int sample = Mathf.RoundToInt(rttSeconds * 1000f);
+            sample = Mathf.Clamp(sample, 0, ushort.MaxValue);
+
+            //exponential moving average: responsive enough to show a real change,
+            //steady enough to read
+            SmoothedPing = SmoothedPing <= 0
+                ? sample
+                : Mathf.RoundToInt(SmoothedPing * 0.7f + sample * 0.3f);
+
+            if (Globals.LocalPlayer != null)
+            {
+                Globals.LocalPlayer.Ping = SmoothedPing;
+            }
+        }
 
         /// <summary>
         /// Acts as the initializer for the Mod
@@ -98,8 +134,44 @@ namespace SRMultiplayer
         {
             if(Globals.GameLoaded)
             {
+                if (Globals.IsClient)
+                {
+                    //measure the round trip on a steady cadence; the reply also
+                    //carries the world clock, so this doubles as the fast time sync
+                    if (Time.realtimeSinceStartup - m_LastPing > PingInterval)
+                    {
+                        m_LastPing = Time.realtimeSinceStartup;
+                        new PacketPing()
+                        {
+                            ClientTime = Time.realtimeSinceStartup,
+                            ReportedPing = SmoothedPing
+                        }.Send(NetDeliveryMethod.Unreliable);
+                    }
+                }
+
                 if(Globals.IsServer)
                 {
+                    //the host is the authority, so its own ping is zero by definition
+                    if (Globals.LocalPlayer != null) Globals.LocalPlayer.Ping = 0;
+
+                    //publish everyone's ping so every client can show the lobby
+                    if (Time.realtimeSinceStartup - m_LastPingBroadcast > PingBroadcastInterval)
+                    {
+                        m_LastPingBroadcast = Time.realtimeSinceStartup;
+
+                        var pings = new List<PacketPlayerPings.PingData>();
+                        foreach (var p in Globals.Players.Values)
+                        {
+                            if (p == null) continue;
+                            pings.Add(new PacketPlayerPings.PingData()
+                            {
+                                ID = p.ID,
+                                Ping = (ushort)Mathf.Clamp(p.Ping, 0, ushort.MaxValue)
+                            });
+                        }
+                        new PacketPlayerPings() { Pings = pings }.SendToAll();
+                    }
+
                     //every 30 seconds  send a time updater out to all clients 
                     if(Time.time - m_LastTimeSync > 30)
                     {

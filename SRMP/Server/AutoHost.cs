@@ -44,10 +44,14 @@ namespace SRMultiplayer.Server
             //claim the username before EpicApplication logs in with it
             Globals.Username = Config.Username;
 
+            //EOS fixes lobby size at creation, so this must be set before hosting
+            Globals.MaxPlayers = Mathf.Clamp(Config.MaxPlayers, 2, 64);
+
             ServerLog("=====================================");
             ServerLog(" SRMP headless host starting");
             ServerLog(" username : " + Config.Username);
             ServerLog(" save     : " + (string.IsNullOrEmpty(Config.GameName) ? "<new game>" : Config.GameName));
+            ServerLog(" slots    : " + Globals.MaxPlayers);
             ServerLog(" config   : " + AutoHostConfig.ConfigPath);
             ServerLog("=====================================");
         }

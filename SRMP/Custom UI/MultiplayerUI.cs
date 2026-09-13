@@ -310,6 +310,37 @@ public class MultiplayerUI : SRSingleton<MultiplayerUI>
     }
 
     /// <summary>
+    /// Renders a player's round trip time, coloured by how playable it is.
+    /// A host has no round trip to itself, so it is labelled rather than shown
+    /// as a suspiciously perfect 0 ms.
+    /// </summary>
+    private static void PingLabel(NetworkPlayer player)
+    {
+        var previous = GUI.contentColor;
+
+        if (player.IsLocal && Globals.IsServer)
+        {
+            GUI.contentColor = Color.grey;
+            GUILayout.Label("host", GUILayout.Width(60));
+        }
+        else if (player.Ping <= 0)
+        {
+            GUI.contentColor = Color.grey;
+            GUILayout.Label("-- ms", GUILayout.Width(60));
+        }
+        else
+        {
+            if (player.Ping < 80) GUI.contentColor = Color.green;
+            else if (player.Ping < 200) GUI.contentColor = Color.yellow;
+            else GUI.contentColor = new Color(1f, 0.4f, 0.4f);
+
+            GUILayout.Label(player.Ping + " ms", GUILayout.Width(60));
+        }
+
+        GUI.contentColor = previous;
+    }
+
+    /// <summary>
     /// Display the active server info part of the gui
     /// </summary>
     private void ServerGUI()
@@ -329,17 +360,17 @@ public class MultiplayerUI : SRSingleton<MultiplayerUI>
         playersScroll = GUILayout.BeginScrollView(playersScroll, GUI.skin.box);
         foreach (var player in Globals.Players.Values)
         {
-            if (player.IsLocal) continue;
-
             GUILayout.BeginHorizontal();
-            GUILayout.Label(player.Username);
+            GUILayout.Label(player.IsLocal ? player.Username + " (you)" : player.Username);
             if (player.IsVR)
             {
                 GUI.contentColor = Color.cyan;
                 GUILayout.Label("VR");
                 GUI.contentColor = Color.white;
             }
-            if (GUILayout.Button("Kick"))
+            GUILayout.FlexibleSpace();
+            PingLabel(player);
+            if (!player.IsLocal && GUILayout.Button("Kick"))
             {
                 NetworkServer.Instance.DisconnectKick(player);
             }
@@ -359,16 +390,16 @@ public class MultiplayerUI : SRSingleton<MultiplayerUI>
         playersScroll = GUILayout.BeginScrollView(playersScroll, GUI.skin.box);
         foreach (var player in Globals.Players.Values)
         {
-            if (player.IsLocal) continue;
-
             GUILayout.BeginHorizontal();
-            GUILayout.Label(player.Username);        
+            GUILayout.Label(player.IsLocal ? player.Username + " (you)" : player.Username);
             if (player.IsVR)
             {
                 GUI.contentColor = Color.cyan;
                 GUILayout.Label("VR");
                 GUI.contentColor = Color.white;
             }
+            GUILayout.FlexibleSpace();
+            PingLabel(player);
             GUILayout.EndHorizontal();
         }
         GUILayout.EndScrollView();

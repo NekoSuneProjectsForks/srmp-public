@@ -32,6 +32,13 @@ namespace SRMultiplayer.Server
         /// <summary>Create a new game when <see cref="GameName"/> cannot be found.</summary>
         public bool CreateGameIfMissing = true;
 
+        /// <summary>
+        /// Lobby capacity including the host. EOS allows up to 64, but this is a
+        /// full game simulation per player on one machine, so raising it costs
+        /// host CPU and bandwidth, not just a number.
+        /// </summary>
+        public int MaxPlayers = 16;
+
         /// <summary>Seconds to wait at the main menu before touching anything.</summary>
         public float StartupDelaySeconds = 3f;
 
@@ -116,6 +123,13 @@ namespace SRMultiplayer.Server
                         break;
                     case "-srmp-gamemode":
                         if (i + 1 < args.Length) GameMode = args[++i];
+                        break;
+                    case "-srmp-slots":
+                        if (i + 1 < args.Length && int.TryParse(args[i + 1], out int slots))
+                        {
+                            MaxPlayers = slots;
+                            i++;
+                        }
                         break;
                 }
             }

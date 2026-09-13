@@ -1,4 +1,5 @@
 ﻿using Epic.OnlineServices;
+using UnityEngine;
 using Epic.OnlineServices.Lobby;
 using Epic.OnlineServices.RTC;
 using System;
@@ -174,7 +175,7 @@ namespace SRMultiplayer.EpicSDK
                     Flags = (uint)JoinRoomFlags.EnableEcho
                 },
                 LocalUserId = SRSingleton<EpicApplication>.Instance.Authentication.ProductUserId,
-                MaxLobbyMembers = 16,
+                MaxLobbyMembers = (uint)Mathf.Clamp(Globals.MaxPlayers, 2, 64),
                 PermissionLevel = LobbyPermissionLevel.Joinviapresence,
                 PresenceEnabled = false,
             };

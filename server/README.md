@@ -18,7 +18,7 @@ Consequences worth knowing before you commit a box to this:
   path was removed when the mod moved to Epic Online Services relay.
 - Because it relays through EOS, you do **not** need to forward any ports. You
   do need working outbound internet.
-- Lobby cap is 16 players; the host counts as one.
+- Lobby capacity defaults to 16 including the host, configurable up to 64 via `SRMP_SLOTS`.
 - Every client must run the **exact same `SRMP.dll` build** as the server. The
   build bumps its version each compile and the mod rejects mismatched versions
   on connect, so ship your players the same file you put on the server.
@@ -126,6 +126,7 @@ No scripts to download — the image dispatches on its first argument:
 | `login` | One-time interactive Steam login. Needs `-it`. |
 | `code` | Prints the current friend code. |
 | `stop` | Asks a running server to save and quit. |
+| `diagnose` | Dumps Wine/SRML state and runs the installer verbosely. |
 | `shell` | A shell inside the runtime, for poking around. |
 | `help` | Usage, with copy-pasteable examples. |
 
@@ -167,6 +168,62 @@ InitializeEngineGraphics failed
 If `nographics` misbehaves, switch to `software` — it keeps the D3D11 path the
 game actually ships shaders for.
 
+## Sizing the server
+
+**First, a correction worth knowing:** Docker applies **no memory limit** unless
+you set one. If you never set `mem_limit`, the container was already free to use
+all host RAM — so a "default RAM limit" was not throttling anything, and the
+1–2 GB you observed was simply what the game uses.
+
+### How resources actually scale with players
+
+SRMP is a listen server: the host runs one complete game world, and **the world
+is the same size whether one player is connected or twelve**. Each extra player
+adds a player object, their held actors, and their share of packet traffic — not
+another copy of the world. So:
+
+| Resource | How it scales | Why |
+| --- | --- | --- |
+| RAM | Barely | One world, loaded once. Extra players are small objects. |
+| CPU | Noticeably | The host arbitrates every actor and every packet for everyone. |
+| Bandwidth | Linearly | Every update is relayed to every other player. |
+
+**RAM is the resource least likely to be your problem.** CPU is the one that
+bites.
+
+### Rough guidance
+
+These are estimates from the observed 1–2 GB baseline, not measurements across
+player counts — I have not profiled this at each slot count:
+
+| Slots | `mem_limit` | `cpus` |
+| --- | --- | --- |
+| 2–4 | 3g | 2 |
+| 8 | 4g | 2–3 |
+| 16 (default) | 4–6g | 3–4 |
+| 32+ | 8g | 4+ |
+
+Set `mem_limit` comfortably above real usage. A limit that is too low does not
+degrade gracefully — the container gets OOM-killed and the world reverts to the
+last autosave.
+
+### If players are desyncing, suspect CPU before RAM
+
+Remote player positions are sent from the game's `Update` loop, so **the host's
+frame rate directly sets how often everyone else's updates go out**. A host
+starved of CPU sends fewer updates, and every client sees other players stutter
+and slide. Under `RENDER_MODE=software` the host also burns CPU on software
+rendering nobody looks at.
+
+Two things to try, in order:
+
+1. `RENDER_MODE=nographics` — stops paying for frames nobody sees.
+2. Raise `cpus`, and check the host is not oversubscribed. `docker stats
+   srmp-server` showing CPU pinned near its limit means the host cannot keep up.
+
+Watch the ping column in the multiplayer menu while testing: if pings are low
+but players still slide around, it is host frame rate, not the network.
+
 ## Already have the game on the box?
 
 Skip SteamCMD entirely: mount your install at `./game` and set
@@ -184,6 +241,7 @@ missing.
 | `SRMP_GAME` | Existing save to host. Blank creates a new world. |
 | `SRMP_NEW_GAME_NAME` | Display name used when creating a new world. |
 | `SRMP_GAMEMODE` | `CLASSIC`, `CASUAL`, `TIME_LIMIT` or `TIME_LIMIT_V2`. |
+| `SRMP_SLOTS` | Lobby capacity including the host (2-64). Default 16. |
 | `SRMP_STATUS_INTERVAL` | Seconds between "N players online" lines. `0` disables. |
 | `SRMP_AUTOSAVE_INTERVAL` | Seconds between forced saves. `0` disables. |
 | `SRML_URL` | Where to fetch `SRMLInstaller.exe`. Override if the default 404s. |
@@ -273,6 +331,21 @@ under Wine is the least certain part of this whole setup.
 **`Server is already active for display 99`** — a restarting container keeps its
 filesystem, so a previous run's X lock survived. The entrypoint now clears stale
 locks on startup; if you see this on an older image, pull the latest.
+
+**`Wine Mono is not installed`, but the image has the MSI** — the Wine prefix
+lives in a volume that outlives the image, so a prefix built by an older image
+does not gain things a newer one ships. The entrypoint now installs Mono into an
+existing prefix on startup, so this heals itself. To force a clean prefix
+anyway:
+
+```bash
+docker compose down
+docker volume rm srmp_wineprefix
+docker compose up -d
+```
+
+Note that Wine Mono is only needed to run SRML's *installer*. If your `/game` is
+already patched, the server does not need it at all.
 
 **`no SRMP.dll found`** — build it on Windows and copy it into `./mods`.
 

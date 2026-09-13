@@ -92,6 +92,8 @@ namespace SRMultiplayer.Networking
                 //World
                 case PacketType.WorldData: OnWorldData(new PacketWorldData(im)); break;
                 case PacketType.WorldTime: OnWorldTime(new PacketWorldTime(im)); break;
+                case PacketType.Pong: OnPong(new PacketPong(im)); break;
+                case PacketType.PlayerPings: OnPlayerPings(new PacketPlayerPings(im)); break;
                 case PacketType.WorldFastForward: OnWorldFastForward(new PacketWorldFastForward(im)); break;
                 case PacketType.WorldProgress: OnWorldProgress(new PacketWorldProgress(im)); break;
                 case PacketType.WorldKey: OnWorldKey(new PacketWorldKey(im)); break;
@@ -1338,7 +1340,59 @@ namespace SRMultiplayer.Networking
         }
 
         private static void OnWorldTime(PacketWorldTime packet)
-            => SRSingleton<SceneContext>.Instance.TimeDirector.worldModel.worldTime = packet.Time;
+            => ApplyServerWorldTime(packet.Time, 0f);
+
+        /// <summary>
+        /// Completes a round trip: derives the RTT from our own echoed stamp, so
+        /// no shared clock is needed, and uses it to correct the world time that
+        /// travelled with the reply.
+        /// </summary>
+        private static void OnPong(PacketPong packet)
+        {
+            //realtimeSinceStartup, not Time.time: it keeps ticking while paused
+            //and is unaffected by timeScale, which the game changes
+            float rtt = (float)(Time.realtimeSinceStartup - packet.ClientTime);
+            if (rtt < 0f) return; //clock went backwards; the sample is useless
+
+            SRMP.RecordPingSample(rtt);
+            ApplyServerWorldTime(packet.WorldTime, rtt * 0.5f);
+        }
+
+        private static void OnPlayerPings(PacketPlayerPings packet)
+        {
+            foreach (var entry in packet.Pings)
+            {
+                if (Globals.Players.TryGetValue(entry.ID, out var player) && player != null)
+                {
+                    player.Ping = entry.Ping;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Adopts the server's world clock, advanced by however much it moved on
+        /// while the packet was in flight. World time is not real time, so the
+        /// one-way delay is converted using the rate the clock is currently
+        /// running at - which also covers fast-forward.
+        /// </summary>
+        private static void ApplyServerWorldTime(double serverWorldTime, float oneWayDelaySeconds)
+        {
+            var timeDirector = SRSingleton<SceneContext>.Instance.TimeDirector;
+
+            double corrected = serverWorldTime;
+            if (oneWayDelaySeconds > 0f && Time.deltaTime > 0f)
+            {
+                //world time per real second, read from the game itself rather
+                //than assumed, so fast-forward and any future retune still hold
+                double worldTimePerSecond = timeDirector.DeltaWorldTime() / Time.deltaTime;
+                if (worldTimePerSecond > 0 && !double.IsInfinity(worldTimePerSecond))
+                {
+                    corrected += worldTimePerSecond * oneWayDelaySeconds;
+                }
+            }
+
+            timeDirector.worldModel.worldTime = corrected;
+        }
 
         private static void OnWorldData(PacketWorldData packet)
         {

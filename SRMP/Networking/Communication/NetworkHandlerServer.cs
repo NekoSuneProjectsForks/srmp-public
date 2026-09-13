@@ -49,6 +49,7 @@ namespace SRMultiplayer.Networking
                 case PacketType.PlayerUpgradeUnlock: OnPlayerUpgradeUnlock(new PacketPlayerUpgradeUnlock(im), player); break;
                 case PacketType.PlayerFX: OnPlayerFX(new PacketPlayerFX(im), player); break;
                 case PacketType.PlayerChat: OnPlayerChat(new PacketPlayerChat(im), player); break;
+                case PacketType.Ping: OnPing(new PacketPing(im), player); break;
                 //Actors
                 case PacketType.ActorSpawn: OnActorSpawn(new PacketActorSpawn(im), player); break;
                 case PacketType.ActorDestroy: OnActorDestroy(new PacketActorDestroy(im), player); break;
@@ -1575,6 +1576,25 @@ namespace SRMultiplayer.Networking
         #endregion
 
         #region Players
+        /// <summary>
+        /// Replies immediately so the round trip the client measures reflects the
+        /// network, not our own scheduling, and rides the world clock along with
+        /// it. The client's own measurement is recorded for the lobby list.
+        /// </summary>
+        private static void OnPing(PacketPing packet, NetworkPlayer player)
+        {
+            if (player != null)
+            {
+                player.Ping = packet.ReportedPing;
+            }
+
+            new PacketPong()
+            {
+                ClientTime = packet.ClientTime,
+                WorldTime = SRSingleton<SceneContext>.Instance.TimeDirector.WorldTime()
+            }.Send(player, NetDeliveryMethod.Unreliable);
+        }
+
         private static void OnPlayerChat(PacketPlayerChat packet, NetworkPlayer player)
         {
             packet.message = player.Username + ": " + packet.message;

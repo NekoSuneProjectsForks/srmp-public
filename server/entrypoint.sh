@@ -23,6 +23,7 @@ SRML_URL="${SRML_URL:-https://cdn.0x00sec.xyz/files/games/Slime/SRMLInstaller.ex
 SRMP_USERNAME="${SRMP_USERNAME:-Server}"
 SRMP_GAME="${SRMP_GAME:-}"
 SRMP_GAMEMODE="${SRMP_GAMEMODE:-CLASSIC}"
+SRMP_SLOTS="${SRMP_SLOTS:-16}"
 
 export WINEPREFIX="${WINEPREFIX:-/wine}"
 export DISPLAY=":${DISPLAY_NUM}"
@@ -99,8 +100,44 @@ start_xvfb() {
   die "Xvfb did not create its socket in time"
 }
 
+wine_mono_installed() {
+  [[ -d "${WINEPREFIX}/drive_c/windows/mono" ]]
+}
+
+# The prefix lives in a volume that outlives the image, so a prefix created by
+# an older build can be missing things a newer image ships. Mono is installed
+# here rather than only at image build time, otherwise the operator would have
+# to delete the volume to pick it up.
+ensure_wine_mono() {
+  if wine_mono_installed; then
+    return 0
+  fi
+
+  local msi="${WINE_MONO_MSI:-}"
+  if [[ -z "${msi}" || ! -f "${msi}" ]]; then
+    msi="$(ls -1 /usr/share/wine/mono/*.msi 2>/dev/null | head -n1 || true)"
+  fi
+
+  if [[ -z "${msi}" ]]; then
+    log "WARNING: no Wine Mono MSI in this image; .NET programs will not run"
+    return 0
+  fi
+
+  log "installing wine mono into the prefix ($(basename "${msi}"))"
+  wine msiexec /i "${msi}" /qn >/dev/null 2>&1 || true
+  wineserver -w
+
+  if wine_mono_installed; then
+    log "wine mono installed"
+  else
+    log "WARNING: wine mono still not present after installing ${msi}"
+    log "WARNING: .NET programs such as the SRML installer will not start"
+  fi
+}
+
 init_wine() {
   if [[ -d "${WINEPREFIX}/drive_c" ]]; then
+    ensure_wine_mono
     return 0
   fi
 
@@ -111,12 +148,14 @@ init_wine() {
     log "seeding wine prefix from image template"
     mkdir -p "${WINEPREFIX}"
     cp -a "${template}/." "${WINEPREFIX}/"
+    ensure_wine_mono
     return 0
   fi
 
   log "initializing wine prefix at ${WINEPREFIX} (first run, takes a minute)"
   wineboot --init >/dev/null 2>&1 || true
   wineserver -w
+  ensure_wine_mono
 }
 
 # ------------------------------------------------------------------ login ---
@@ -165,11 +204,16 @@ run_stop() {
 run_diagnose() {
   local managed="${GAME_DIR}/SlimeRancher_Data/Managed"
 
+  # Bring the prefix up to date first, exactly as `serve` would, so this reports
+  # the state the server will actually run with.
+  start_xvfb
+  init_wine
+
   echo "== wine =="
   wine --version || true
   echo "WINEPREFIX=${WINEPREFIX}"
   echo "WINEDLLOVERRIDES=${WINEDLLOVERRIDES:-<unset>}"
-  if [[ -d "${WINEPREFIX}/drive_c/windows/mono" ]]; then
+  if wine_mono_installed; then
     ls -1 "${WINEPREFIX}/drive_c/windows/mono"
   else
     echo "NO wine mono in this prefix"
@@ -186,8 +230,6 @@ run_diagnose() {
 
   echo ""
   echo "== running the SRML installer verbosely =="
-  start_xvfb
-  init_wine
   ( cd "${GAME_DIR}" \
       && WINEDEBUG="err+all,fixme-all" wine SRMLInstaller.exe < /dev/null ) 2>&1 || true
   wineserver -w
@@ -197,7 +239,7 @@ run_diagnose() {
   ls -la "${managed}" 2>/dev/null | grep -iE 'srml|assembly-csharp' || echo "none found"
 
   echo ""
-  echo "== unity player log =="
+  echo "== unity player log (may be from an earlier run) =="
   local player_log
   player_log="$(find_player_log)"
   if [[ -n "${player_log}" ]]; then
@@ -361,6 +403,7 @@ write_config() {
   "NewGameDisplayName": "${SRMP_NEW_GAME_NAME:-SRMP Server}",
   "GameMode": "${SRMP_GAMEMODE}",
   "CreateGameIfMissing": true,
+  "MaxPlayers": ${SRMP_SLOTS},
   "StartupDelaySeconds": 5.0,
   "LoginTimeoutSeconds": 90.0,
   "LoadTimeoutSeconds": 600.0,
@@ -447,7 +490,7 @@ run_server() {
   esac
 
   cd "${GAME_DIR}"
-  log "launching Slime Rancher headless as '${SRMP_USERNAME}'"
+  log "launching Slime Rancher headless as '${SRMP_USERNAME}' (${SRMP_SLOTS} slots)"
 
   # Wine's own errors are the only clue when the game dies on startup, so turn
   # them back on here regardless of the quieter default used elsewhere.
@@ -458,6 +501,7 @@ run_server() {
     -srmp-autohost \
     -srmp-username "${SRMP_USERNAME}" \
     -srmp-gamemode "${SRMP_GAMEMODE}" \
+    -srmp-slots "${SRMP_SLOTS}" \
     ${SRMP_GAME:+-srmp-game "${SRMP_GAME}"} \
     "${render_args[@]}" > "${game_out}" 2>&1 &
   GAME_PID=$!
