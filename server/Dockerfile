@@ -76,13 +76,15 @@ RUN set -eux; \
 # No GPU on a VPS: render in software via llvmpipe when rendering is needed.
 # WINEDLLOVERRIDES disables mshtml (nothing here renders HTML) but must leave
 # mscoree enabled — that is the .NET shim the SRML installer needs to start.
+# WINEDEBUG silences fixme noise but keeps err messages: those are usually the
+# only explanation when the game or the installer dies on startup.
 ENV LIBGL_ALWAYS_SOFTWARE=1 \
     GALLIUM_DRIVER=llvmpipe \
     MESA_LOADER_DRIVER_OVERRIDE=llvmpipe \
     WINEPREFIX=/wine \
     WINE_TEMPLATE=/opt/wine-template \
     WINEDLLOVERRIDES="mshtml=" \
-    WINEDEBUG="fixme-all,err-all" \
+    WINEDEBUG="fixme-all" \
     GAME_DIR=/game \
     MODS_DIR=/mods \
     STEAM_APPID=433340 \

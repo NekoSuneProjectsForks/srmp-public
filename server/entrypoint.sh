@@ -6,6 +6,7 @@
 #   login             one-time interactive Steam login (answers Steam Guard)
 #   code              print the current friend code and exit
 #   stop              ask a running server to save and quit
+#   diagnose          dump wine/SRML state and run the installer verbosely
 #   shell             drop into a shell inside the runtime
 set -euo pipefail
 
@@ -45,6 +46,7 @@ Commands:
   login    one-time interactive Steam login, needed once per Steam account
   code     print the current friend code and exit
   stop     ask a running server to save and quit
+  diagnose dump wine/SRML state and run the installer verbosely
   shell    drop into a shell inside the runtime
 
 Typical first run:
@@ -157,6 +159,57 @@ run_stop() {
   log "shutdown requested; the server will save and quit shortly"
 }
 
+# --------------------------------------------------------------- diagnose ---
+# Everything needed to work out why the SRML patch is not taking, without
+# sitting through a restart loop.
+run_diagnose() {
+  local managed="${GAME_DIR}/SlimeRancher_Data/Managed"
+
+  echo "== wine =="
+  wine --version || true
+  echo "WINEPREFIX=${WINEPREFIX}"
+  echo "WINEDLLOVERRIDES=${WINEDLLOVERRIDES:-<unset>}"
+  if [[ -d "${WINEPREFIX}/drive_c/windows/mono" ]]; then
+    ls -1 "${WINEPREFIX}/drive_c/windows/mono"
+  else
+    echo "NO wine mono in this prefix"
+  fi
+  ls -1 /usr/share/wine/mono/ 2>/dev/null || echo "no mono MSI staged in the image"
+
+  echo ""
+  echo "== game folder =="
+  ls -la "${GAME_DIR}" 2>/dev/null | head -20
+
+  echo ""
+  echo "== managed assemblies =="
+  ls -la "${managed}" 2>/dev/null | grep -iE 'srml|assembly-csharp' || echo "none found"
+
+  echo ""
+  echo "== running the SRML installer verbosely =="
+  start_xvfb
+  init_wine
+  ( cd "${GAME_DIR}" \
+      && WINEDEBUG="err+all,fixme-all" wine SRMLInstaller.exe < /dev/null ) 2>&1 || true
+  wineserver -w
+
+  echo ""
+  echo "== managed assemblies after =="
+  ls -la "${managed}" 2>/dev/null | grep -iE 'srml|assembly-csharp' || echo "none found"
+
+  echo ""
+  echo "== unity player log =="
+  local player_log
+  player_log="$(find_player_log)"
+  if [[ -n "${player_log}" ]]; then
+    echo "${player_log}"
+    tail -n 40 "${player_log}"
+  else
+    echo "none found"
+  fi
+
+  [[ -n "${XVFB_PID}" ]] && kill "${XVFB_PID}" 2>/dev/null || true
+}
+
 # --------------------------------------------------------------- steamcmd ---
 fetch_game() {
   local have_game="no"
@@ -224,11 +277,33 @@ install_srml() {
 Delete it and retry, or drop a known-good SRMLInstaller.exe into ${MODS_DIR}."
   fi
 
+  # Wine Mono is what lets a .NET installer start at all. Say so up front,
+  # because its absence otherwise shows up as a silent no-op.
+  if [[ -d "${WINEPREFIX}/drive_c/windows/mono" ]]; then
+    log "wine mono present"
+  else
+    log "WARNING: no wine mono in the prefix — a .NET installer cannot run."
+    log "WARNING: delete the wine volume and recreate it to pick up a rebuilt image."
+  fi
+
   log "patching the game with SRML"
   # The installer is a .NET console app that patches the folder it sits in. It
   # waits on a keypress at the end, so feed it stdin rather than letting it block.
-  ( cd "${GAME_DIR}" && wine SRMLInstaller.exe < /dev/null ) || true
+  # Its output is the only diagnostic when the patch quietly does nothing, so
+  # capture it with Wine's own errors turned back on and always echo it.
+  local out="/tmp/srml-install.log"
+  ( cd "${GAME_DIR}" \
+      && WINEDEBUG="err+all,fixme-all" wine SRMLInstaller.exe < /dev/null ) \
+    > "${out}" 2>&1 || true
   wineserver -w
+
+  if [[ -s "${out}" ]]; then
+    log "--- SRML installer output ---"
+    sed 's/^/[srml] /' "${out}"
+    log "--- end installer output ---"
+  else
+    log "the SRML installer produced no output at all"
+  fi
 
   if [[ ! -f "${managed}/SRML.dll" ]]; then
     die "SRML patch did not produce ${managed}/SRML.dll.
@@ -239,9 +314,19 @@ Check the Wine output above. Common causes:
     use the fallback below.
   * the game folder is incomplete or read-only.
 
-Fallback that always works: install SRML on a Windows machine, then copy that
-already-patched game folder to this host and mount it at ${GAME_DIR}. The
-entrypoint detects a patched install and skips this step entirely."
+Run 'srmp diagnose' for a verbose installer run.
+
+Fallback that always works: install SRML on a Windows machine, then copy these
+from that install into ${GAME_DIR} here:
+
+  SlimeRancher_Data/Managed/Assembly-CSharp.dll      (the patched one)
+  SlimeRancher_Data/Managed/Assembly-CSharp_old.dll
+  SlimeRancher_Data/Managed/SRML.dll
+  SlimeRancher_Data/Managed/SRML.Editor.dll
+  SlimeRancher_Data/Managed/SRML.xml
+  SRML/                                              (the whole folder)
+
+The entrypoint detects a patched install and skips this step entirely."
   fi
   log "SRML installed"
 }
@@ -361,13 +446,22 @@ run_server() {
   cd "${GAME_DIR}"
   log "launching Slime Rancher headless as '${SRMP_USERNAME}'"
 
-  wine SlimeRancher.exe \
+  # Wine's own errors are the only clue when the game dies on startup, so turn
+  # them back on here regardless of the quieter default used elsewhere.
+  local game_out="/tmp/game-stdout.log"
+  : > "${game_out}"
+
+  WINEDEBUG="err+all,fixme-all" wine SlimeRancher.exe \
     -srmp-autohost \
     -srmp-username "${SRMP_USERNAME}" \
     -srmp-gamemode "${SRMP_GAMEMODE}" \
     ${SRMP_GAME:+-srmp-game "${SRMP_GAME}"} \
-    "${render_args[@]}" &
+    "${render_args[@]}" > "${game_out}" 2>&1 &
   GAME_PID=$!
+
+  # Stream whatever the game says straight into docker logs.
+  tail -n +1 -F "${game_out}" 2>/dev/null | sed 's/^/[game] /' &
+  local game_tail_pid=$!
 
   # Surface the friend code as soon as the mod publishes it.
   (
@@ -383,28 +477,70 @@ run_server() {
     log "WARNING: no friend code after 15 minutes, check the log above"
   ) &
 
-  # Follow the SRMP log so docker logs shows what the server is doing. The mod
-  # writes a fresh timestamped file per run, so wait for it and tail the newest.
-  local logfile=""
-  for _ in $(seq 1 180); do
-    logfile="$(ls -1t "${GAME_DIR}/SRMP/Logs"/log-*.txt 2>/dev/null | head -n1 || true)"
-    [[ -n "${logfile}" ]] && break
-    sleep 1
-  done
-  if [[ -n "${logfile}" ]]; then
-    log "following ${logfile}"
-    tail -n +1 -F "${logfile}" &
-    TAIL_PID=$!
-  else
-    log "WARNING: no SRMP log in ${GAME_DIR}/SRMP/Logs — the mod may not have loaded"
-  fi
+  # Follow the SRMP log once it appears. This has to run in the background:
+  # waiting for it inline would hide a game that dies during startup.
+  (
+    local found=""
+    for _ in $(seq 1 180); do
+      found="$(ls -1t "${GAME_DIR}/SRMP/Logs"/log-*.txt 2>/dev/null | head -n1 || true)"
+      if [[ -n "${found}" ]]; then
+        echo "[srmp-server] following ${found}"
+        exec tail -n +1 -F "${found}"
+      fi
+      sleep 1
+    done
+    echo "[srmp-server] WARNING: no SRMP log in ${GAME_DIR}/SRMP/Logs — the mod may not have loaded"
+  ) &
+  TAIL_PID=$!
 
   local exit_code=0
   wait "${GAME_PID}" || exit_code=$?
+
+  #let the streamed output catch up before anything is torn down
+  sleep 2
   log "game exited with code ${exit_code}"
+
+  if (( exit_code != 0 )); then
+    dump_crash_diagnostics "${game_out}"
+  fi
+
+  kill "${game_tail_pid}" 2>/dev/null || true
   [[ -n "${TAIL_PID}" ]] && kill "${TAIL_PID}" 2>/dev/null || true
   [[ -n "${XVFB_PID}" ]] && kill "${XVFB_PID}" 2>/dev/null || true
   exit "${exit_code}"
+}
+
+# Unity records far more in its own Player.log than it prints to stdout, so pull
+# that in too when the game fails to start.
+find_player_log() {
+  find "${WINEPREFIX}/drive_c/users" \
+    -path '*Monomi Park/Slime Rancher/Player.log' -type f 2>/dev/null | head -n1
+}
+
+dump_crash_diagnostics() {
+  local game_out="$1"
+
+  log "--- the game failed to start; diagnostics follow ---"
+
+  if [[ -s "${game_out}" ]]; then
+    log "--- last 60 lines of game output ---"
+    tail -n 60 "${game_out}" | sed 's/^/[game] /'
+  else
+    log "the game produced no output at all"
+  fi
+
+  local player_log
+  player_log="$(find_player_log)"
+  if [[ -n "${player_log}" ]]; then
+    log "--- last 60 lines of ${player_log} ---"
+    tail -n 60 "${player_log}" | sed 's/^/[unity] /'
+  else
+    log "no Unity Player.log found — the game did not get far enough to write one"
+  fi
+
+  log "--- end diagnostics ---"
+  log "If this mentions steam_api64 or Steam, the game wants a running Steam"
+  log "client. If it mentions GL or the display, try RENDER_MODE=nographics."
 }
 
 # ------------------------------------------------------------------- main ---
@@ -416,6 +552,7 @@ case "${COMMAND}" in
   login)          run_login ;;
   code)           run_code ;;
   stop)           run_stop ;;
+  diagnose)       run_diagnose ;;
   shell|bash)     exec bash "$@" ;;
   help|--help|-h) usage ;;
   *)

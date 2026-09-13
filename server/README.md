@@ -236,10 +236,31 @@ the Wine output just above it:
   in place of the installer. Delete `game/SRMLInstaller.exe` and retry, or drop
   a known-good one into `./mods`.
 
+Get the full picture with:
+
+```bash
+docker compose run --rm srmp diagnose
+```
+
+That prints the Wine version, whether Wine Mono is in the prefix, the game
+folder contents, and a verbose installer run — without a restart loop.
+
 **Fallback that always works:** install SRML on a Windows machine, then copy
-that already-patched game folder to the server and mount it at `/game`. The
-entrypoint detects a patched install (`Assembly-CSharp_old.dll` present) and
-skips this step entirely.
+these from that install into your `./game` folder here:
+
+```
+SlimeRancher_Data/Managed/Assembly-CSharp.dll      <- the patched one
+SlimeRancher_Data/Managed/Assembly-CSharp_old.dll
+SlimeRancher_Data/Managed/SRML.dll
+SlimeRancher_Data/Managed/SRML.Editor.dll
+SlimeRancher_Data/Managed/SRML.xml
+SRML/                                              <- the whole folder
+```
+
+The entrypoint detects a patched install (`SRML.dll` **and**
+`Assembly-CSharp_old.dll` present) and skips the patch step entirely. This is
+the reliable route — SRML's installer is a Windows-native tool, and running it
+under Wine is the least certain part of this whole setup.
 
 **`Server is already active for display 99`** — a restarting container keeps its
 filesystem, so a previous run's X lock survived. The entrypoint now clears stale
@@ -255,7 +276,16 @@ marker that SRML actually patched the game.
 not complete` in the log. EOS relay needs outbound internet; a blocked egress
 will do this.
 
-**Game will not launch under Wine at all** — the most likely cause is
-`steam_api64.dll` expecting a running Steam client. If you hit this, the
-workaround is running the Steam client inside the same Wine prefix, which is a
-heavier setup than this image provides.
+**Game exits immediately after "launching Slime Rancher headless"** — the
+entrypoint prints diagnostics on any non-zero exit: the last 60 lines of the
+game's own output (prefixed `[game]`) and of Unity's `Player.log` (prefixed
+`[unity]`). Read those first. Two common patterns:
+
+- mentions of `steam_api64` or Steam — the game wants a running Steam client.
+  The workaround is running Steam inside the same Wine prefix, a heavier setup
+  than this image provides.
+- mentions of GL, GLX or the display — software rendering is not satisfying the
+  game. Try `RENDER_MODE=nographics`.
+
+Live output from the game is streamed as it happens, so `docker logs -f
+srmp-server` shows the failure as it occurs.
