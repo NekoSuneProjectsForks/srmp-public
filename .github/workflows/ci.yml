@@ -96,7 +96,6 @@ jobs:
             'DOTween.dll',
             'InControl.dll',
             'Unity.TextMeshPro.dll',
-            'UnityCoreMod.dll',
             'UnityEngine.dll',
             'UnityEngine.AnimationModule.dll',
             'UnityEngine.AssetBundleModule.dll',
@@ -121,6 +120,9 @@ jobs:
             }
           }
 
+          if ($builder -notmatch 'UnityCoreMod') {
+            throw 'Build-SRMP.ps1 must explicitly handle the obsolete UnityCoreMod project references for SRML builds.'
+          }
           if ($builder -notmatch 'SlimeRancher_Data\\Managed') {
             throw 'Build-SRMP.ps1 no longer resolves game Managed assemblies.'
           }
@@ -129,6 +131,7 @@ jobs:
           }
 
           Write-Host 'External reference contract is complete.'
+          Write-Host 'UnityCoreMod is treated as an obsolete project reference and is not staged for SRML builds.'
           Write-Host 'The real SRMP DLL build intentionally runs on a Windows machine with a licensed Slime Rancher 1 + SRML installation.'
 
       - name: Verify hosted runner does not contain proprietary game assemblies
