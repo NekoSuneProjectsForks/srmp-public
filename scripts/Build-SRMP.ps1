@@ -18,9 +18,23 @@ $outputDll = Join-Path $repoRoot 'Builds\SRMP\SRMP.dll'
 
 function Test-GamePath {
     param([string]$Path)
+
     if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
-    return (Test-Path -LiteralPath (Join-Path $Path 'SlimeRancher.exe') -PathType Leaf) -and
-           (Test-Path -LiteralPath (Join-Path $Path 'SlimeRancher_Data\Managed') -PathType Container)
+
+    try {
+        if (-not (Test-Path -LiteralPath $Path -PathType Container -ErrorAction SilentlyContinue)) {
+            return $false
+        }
+
+        $exe = [IO.Path]::Combine($Path, 'SlimeRancher.exe')
+        $managed = [IO.Path]::Combine($Path, 'SlimeRancher_Data', 'Managed')
+
+        return (Test-Path -LiteralPath $exe -PathType Leaf -ErrorAction SilentlyContinue) -and
+               (Test-Path -LiteralPath $managed -PathType Container -ErrorAction SilentlyContinue)
+    }
+    catch {
+        return $false
+    }
 }
 
 function Get-SteamLibraryPaths {
@@ -40,17 +54,28 @@ function Get-SteamLibraryPaths {
         } catch { }
     }
 
-    if (${env:ProgramFiles(x86)}) { $steamRoots.Add((Join-Path ${env:ProgramFiles(x86)} 'Steam')) }
+    if (${env:ProgramFiles(x86)}) {
+        $steamRoots.Add([IO.Path]::Combine(${env:ProgramFiles(x86)}, 'Steam'))
+    }
 
     foreach ($root in ($steamRoots | Select-Object -Unique)) {
-        if (-not (Test-Path -LiteralPath $root -PathType Container)) { continue }
+        if ([string]::IsNullOrWhiteSpace($root)) { continue }
+        if (-not (Test-Path -LiteralPath $root -PathType Container -ErrorAction SilentlyContinue)) { continue }
+
         $paths.Add($root)
-        $vdf = Join-Path $root 'steamapps\libraryfolders.vdf'
-        if (Test-Path -LiteralPath $vdf -PathType Leaf) {
+        $vdf = [IO.Path]::Combine($root, 'steamapps', 'libraryfolders.vdf')
+        if (Test-Path -LiteralPath $vdf -PathType Leaf -ErrorAction SilentlyContinue) {
             $raw = Get-Content -LiteralPath $vdf -Raw
             foreach ($match in [regex]::Matches($raw, '"path"\s+"([^"]+)"')) {
                 $library = $match.Groups[1].Value -replace '\\\\', '\'
-                if ($library) { $paths.Add($library) }
+                if ([string]::IsNullOrWhiteSpace($library)) { continue }
+
+                if (Test-Path -LiteralPath $library -PathType Container -ErrorAction SilentlyContinue) {
+                    $paths.Add($library)
+                }
+                else {
+                    Write-Host "Skipping unavailable Steam library: $library" -ForegroundColor DarkYellow
+                }
             }
         }
     }
@@ -68,16 +93,27 @@ function Find-GamePath {
     }
 
     foreach ($library in Get-SteamLibraryPaths) {
-        $candidate = Join-Path $library 'steamapps\common\Slime Rancher'
+        if ([string]::IsNullOrWhiteSpace($library)) { continue }
+        if (-not (Test-Path -LiteralPath $library -PathType Container -ErrorAction SilentlyContinue)) {
+            Write-Host "Skipping unavailable Steam library: $library" -ForegroundColor DarkYellow
+            continue
+        }
+
+        $candidate = [IO.Path]::Combine($library, 'steamapps', 'common', 'Slime Rancher')
         if (Test-GamePath $candidate) { return $candidate }
     }
 
-    foreach ($candidate in @(
-        (Join-Path ${env:ProgramFiles} 'Epic Games\SlimeRancher'),
-        (Join-Path ${env:ProgramFiles} 'Slime Rancher'),
-        $(if (${env:ProgramFiles(x86)}) { Join-Path ${env:ProgramFiles(x86)} 'Steam\steamapps\common\Slime Rancher' })
-    )) {
-        if ($candidate -and (Test-GamePath $candidate)) { return $candidate }
+    $fallbacks = New-Object System.Collections.Generic.List[string]
+    if (${env:ProgramFiles}) {
+        $fallbacks.Add([IO.Path]::Combine(${env:ProgramFiles}, 'Epic Games', 'SlimeRancher'))
+        $fallbacks.Add([IO.Path]::Combine(${env:ProgramFiles}, 'Slime Rancher'))
+    }
+    if (${env:ProgramFiles(x86)}) {
+        $fallbacks.Add([IO.Path]::Combine(${env:ProgramFiles(x86)}, 'Steam', 'steamapps', 'common', 'Slime Rancher'))
+    }
+
+    foreach ($candidate in $fallbacks) {
+        if (Test-GamePath $candidate) { return $candidate }
     }
 
     throw 'Could not find Slime Rancher 1. Pass -GamePath "C:\path\to\Slime Rancher".'
