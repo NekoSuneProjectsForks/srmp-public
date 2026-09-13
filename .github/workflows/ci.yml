@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - 'ci/**'
+      - 'fix/**'
   pull_request:
     branches:
       - main
@@ -14,10 +15,10 @@ permissions:
   contents: read
 
 jobs:
-  validate-and-build:
-    name: Validate and build SRML
+  validate:
+    name: Validate SRMP revival tooling
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
 
     steps:
       - name: Checkout
@@ -30,6 +31,7 @@ jobs:
           $files = @(
             'installer/Install-SRMP.ps1',
             'installer/Uninstall-SRMP.ps1',
+            'scripts/Build-SRMP.ps1',
             'scripts/Package-Release.ps1'
           )
 
@@ -54,17 +56,21 @@ jobs:
 
           Write-Host 'PowerShell syntax validation passed.'
 
-      - name: Validate installer layout
+      - name: Validate installer and build layout
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $required = @(
             'Install SRMP.cmd',
             'Uninstall SRMP.cmd',
+            'Build SRMP.cmd',
             'installer/Install-SRMP.ps1',
             'installer/Uninstall-SRMP.ps1',
+            'scripts/Build-SRMP.ps1',
             'scripts/Package-Release.ps1',
-            'SRMP/SRMP.csproj'
+            'SRMP/SRMP.csproj',
+            'Libs/Assembly-CSharp_publicized.dll',
+            'Libs/SRML.dll'
           )
 
           foreach ($path in $required) {
@@ -78,48 +84,64 @@ jobs:
             throw 'Installer no longer targets SRML\\Mods.'
           }
 
-      - name: Audit project references
-        shell: pwsh
-        run: |
-          $project = Get-Content -LiteralPath 'SRMP/SRMP.csproj' -Raw
-
-          if ($project -match '<HintPath>[A-Za-z]:\\') {
-            Write-Warning 'SRMP.csproj contains an absolute Windows HintPath. The build will prove whether the checked-in local reference is sufficient.'
-          }
-
-      - name: Setup MSBuild
-        uses: microsoft/setup-msbuild@v2
-
-      - name: Setup .NET SDK
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '8.0.x'
-
-      - name: Install dotnet-t4
-        shell: pwsh
-        run: dotnet tool install --global dotnet-t4
-
-      - name: Build SRML configuration
+      - name: Validate external game-reference contract
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          msbuild 'SRMP.sln' /m /restore /p:Configuration=SRML '/p:Platform=Any CPU' /verbosity:minimal
-          if ($LASTEXITCODE -ne 0) { throw "MSBuild failed with exit code $LASTEXITCODE" }
+          $project = Get-Content -LiteralPath 'SRMP/SRMP.csproj' -Raw
+          $builder = Get-Content -LiteralPath 'scripts/Build-SRMP.ps1' -Raw
 
-          $dll = 'Builds/SRMP/SRMP.dll'
-          if (-not (Test-Path -LiteralPath $dll -PathType Leaf)) {
-            throw "Build completed without producing expected output: $dll"
+          $externalReferences = @(
+            '0Harmony.dll',
+            'DOTween.dll',
+            'InControl.dll',
+            'Unity.TextMeshPro.dll',
+            'UnityCoreMod.dll',
+            'UnityEngine.dll',
+            'UnityEngine.AnimationModule.dll',
+            'UnityEngine.AssetBundleModule.dll',
+            'UnityEngine.CoreModule.dll',
+            'UnityEngine.IMGUIModule.dll',
+            'UnityEngine.InputLegacyModule.dll',
+            'UnityEngine.InputModule.dll',
+            'UnityEngine.JSONSerializeModule.dll',
+            'UnityEngine.PhysicsModule.dll',
+            'UnityEngine.TextCoreModule.dll',
+            'UnityEngine.TextRenderingModule.dll',
+            'UnityEngine.UI.dll',
+            'UnityEngine.UIModule.dll'
+          )
+
+          foreach ($reference in $externalReferences) {
+            if ($project -notmatch [regex]::Escape($reference)) {
+              throw "Expected project reference is missing from SRMP.csproj: $reference"
+            }
+            if ($builder -notmatch [regex]::Escape($reference)) {
+              throw "Build-SRMP.ps1 does not stage required reference: $reference"
+            }
           }
 
-          $hash = (Get-FileHash -LiteralPath $dll -Algorithm SHA256).Hash
-          Write-Host "SRMP.dll SHA256: $hash"
+          if ($builder -notmatch 'SlimeRancher_Data\\Managed') {
+            throw 'Build-SRMP.ps1 no longer resolves game Managed assemblies.'
+          }
+          if ($builder -notmatch 'SRML\\Libs') {
+            throw 'Build-SRMP.ps1 no longer resolves SRML libraries.'
+          }
 
-      - name: Upload SRMP build
-        uses: actions/upload-artifact@v4
-        with:
-          name: SRMP-SRML-${{ github.sha }}
-          path: |
-            Builds/SRMP/SRMP.dll
-            Builds/SRMP/SRMP.pdb
-          if-no-files-found: error
-          retention-days: 14
+          Write-Host 'External reference contract is complete.'
+          Write-Host 'The real SRMP DLL build intentionally runs on a Windows machine with a licensed Slime Rancher 1 + SRML installation.'
+
+      - name: Verify hosted runner does not contain proprietary game assemblies
+        shell: pwsh
+        run: |
+          $localOnly = @(
+            'SRMP/UnityEngine.CoreModule.dll',
+            'SRMP/UnityCoreMod.dll',
+            'SRMP/0Harmony.dll'
+          )
+          foreach ($path in $localOnly) {
+            if (Test-Path -LiteralPath $path) {
+              throw "A machine-local/proprietary reference was accidentally committed: $path"
+            }
+          }
+          Write-Host 'No machine-local game references are committed.'
