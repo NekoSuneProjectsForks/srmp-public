@@ -84,7 +84,7 @@ jobs:
           $project = Get-Content -LiteralPath 'SRMP/SRMP.csproj' -Raw
 
           if ($project -match '<HintPath>[A-Za-z]:\\') {
-            Write-Warning 'SRMP.csproj still contains an absolute Windows HintPath. CI will continue because a local fallback reference also exists, but this should be removed in a future cleanup.'
+            Write-Warning 'SRMP.csproj contains an absolute Windows HintPath. The build will prove whether the checked-in local reference is sufficient.'
           }
 
       - name: Setup MSBuild
@@ -103,7 +103,8 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          msbuild 'SRMP.sln' /m /restore /p:Configuration=SRML /p:Platform=AnyCPU /verbosity:minimal
+          msbuild 'SRMP.sln' /m /restore /p:Configuration=SRML '/p:Platform=Any CPU' /verbosity:minimal
+          if ($LASTEXITCODE -ne 0) { throw "MSBuild failed with exit code $LASTEXITCODE" }
 
           $dll = 'Builds/SRMP/SRMP.dll'
           if (-not (Test-Path -LiteralPath $dll -PathType Leaf)) {
