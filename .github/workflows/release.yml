@@ -60,7 +60,8 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          msbuild 'SRMP.sln' /m /restore /p:Configuration=SRML /p:Platform=AnyCPU /verbosity:minimal
+          msbuild 'SRMP.sln' /m /restore /p:Configuration=SRML '/p:Platform=Any CPU' /verbosity:minimal
+          if ($LASTEXITCODE -ne 0) { throw "MSBuild failed with exit code $LASTEXITCODE" }
 
           if (-not (Test-Path -LiteralPath 'Builds/SRMP/SRMP.dll' -PathType Leaf)) {
             throw 'Expected Builds/SRMP/SRMP.dll was not produced.'
@@ -124,6 +125,9 @@ jobs:
           $tag = if ($version.StartsWith('v')) { $version } else { "v$version" }
           $files = Get-ChildItem -LiteralPath 'dist' -File | Where-Object {
             $_.Extension -eq '.zip' -or $_.Name -like '*SHA256.txt'
+          }
+          if ($files.Count -lt 2) {
+            throw 'Expected release ZIP and checksum were not produced.'
           }
           gh release create $tag @($files.FullName) `
             --repo '${{ github.repository }}' `
